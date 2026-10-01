@@ -148,15 +148,6 @@ export function ReportDashboard() {
       columns: dailyTotalsColumns({ content: !isLive }) as never[],
       subtitle: [
         `GMV Max ${SCOPE_LABEL[filters.promotionType]} · รายวัน · ${filters.dateFrom} ถึง ${filters.dateTo}`,
-        filters.storeIds.length === 0 ? "ทุกร้าน" : `${filters.storeIds.length} ร้าน`,
-        `${days.length.toLocaleString("th-TH")} วันที่มีข้อมูล`,
-        // Narrower than it was: the money columns do total to the cards, the three content
-        // columns count distinct videos per day and so over-count across them
-        "คอลัมน์ยอดเงินรวมได้เท่ากับการ์ดสรุปด้านบนของหน้าเว็บ",
-        ...(isLive
-          ? []
-          : ["คอลัมน์นับวิดีโอ/ครีเอเตอร์เป็นตัวเลขรายวัน รวมหลายวันแล้วจะมากกว่าการ์ด เพราะวิดีโอเดิมที่ยิงหลายวันถูกนับซ้ำ"]),
-      ].join(" · "),
     };
   }
 
