@@ -146,8 +146,7 @@ export function ReportDashboard() {
       name: "All",
       rows: days as never[],
       columns: dailyTotalsColumns({ content: !isLive }) as never[],
-      subtitle: [
-        `GMV Max ${SCOPE_LABEL[filters.promotionType]} · รายวัน · ${filters.dateFrom} ถึง ${filters.dateTo}`,
+      subtitle: `GMV Max ${SCOPE_LABEL[filters.promotionType]} · รายวัน · ${filters.dateFrom} ถึง ${filters.dateTo}`,
     };
   }
 
