@@ -36,6 +36,7 @@ export interface ReportRow {
   itemId: string;
   title: string | null;
   ttAccountName: string | null;
+  ttAccountUsername: string | null;
   authorizationType: string | null;
   shopContentType: ShopContentType | null;
   creativeDeliveryStatus: string | null;
@@ -213,6 +214,7 @@ export type DimensionKey =
   | "itemId"
   | "title"
   | "ttAccountName"
+  | "ttAccountUsername"
   | "authorizationType"
   | "shopContentType"
   | "creativeDeliveryStatus";

@@ -294,6 +294,7 @@ export async function fetchCreatives(query: CreativesQuery): Promise<CreativesRe
     itemId: c.item_id,
     title: c.title,
     ttAccountName: c.tt_account_name,
+    ttAccountUsername: c.tt_account_username,
     authorizationType: c.authorization_type,
     shopContentType: c.shop_content_type,
     creativeDeliveryStatus: c.creative_delivery_status,

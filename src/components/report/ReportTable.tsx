@@ -38,8 +38,9 @@ const DIMENSION_COLUMNS: ReadonlyArray<{
   // The creative's own id. TikTok calls it a post; '-1' means the product card.
   { key: "itemId", header: "Post ID", size: 150 },
   { key: "title", header: "Creative", size: 220, defaultHidden: true },
-  // TikTok's own field is the @handle, not the display name
+  // Keep TikTok's display name and the separately verified username side by side.
   { key: "ttAccountName", header: "TikTok display name", size: 150 },
+  { key: "ttAccountUsername", header: "TikTok username", size: 170 },
   { key: "shopContentType", header: "Creative type", size: 110 },
   { key: "campaignName", header: "Campaign name", size: 200, defaultHidden: true },
   { key: "authorizationType", header: "Authorization type", size: 150, defaultHidden: true },

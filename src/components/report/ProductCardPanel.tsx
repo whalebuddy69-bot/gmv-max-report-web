@@ -60,6 +60,7 @@ export function ProductCardPanel({ itemGroupId, onClose }: ProductCardPanelProps
       { header: "Post ID", format: "text", value: (r) => (r.itemId === "-1" ? "การ์ดสินค้า" : r.itemId) },
       { header: "Creative", format: "text", value: (r) => r.title },
       { header: "TikTok display name", format: "text", value: (r) => r.ttAccountName },
+      { header: "TikTok username", format: "text", value: (r) => r.ttAccountUsername },
       { header: "Campaign name", format: "text", value: (r) => r.campaignName },
       ...CREATIVE_METRICS.map((key) => {
         const metric = getMetric(key);
@@ -155,6 +156,7 @@ export function ProductCardPanel({ itemGroupId, onClose }: ProductCardPanelProps
                   <tr className="border-b border-border text-xs text-muted-foreground">
                     <th scope="col" className="px-2 py-1.5 text-left font-medium">Post ID</th>
                     <th scope="col" className="px-2 py-1.5 text-left font-medium">TikTok display name</th>
+                    <th scope="col" className="px-2 py-1.5 text-left font-medium">TikTok username</th>
                     {CREATIVE_METRICS.map((key) => (
                       <th key={key} scope="col" className="px-2 py-1.5 text-right font-medium">
                         {getMetric(key).label}
@@ -173,6 +175,9 @@ export function ProductCardPanel({ itemGroupId, onClose }: ProductCardPanelProps
                       </td>
                       <td className="max-w-40 truncate px-2 py-1.5" title={row.ttAccountName ?? ""}>
                         {formatDimension(row.ttAccountName)}
+                      </td>
+                      <td className="max-w-48 truncate px-2 py-1.5" title={row.ttAccountUsername ?? ""}>
+                        {formatDimension(row.ttAccountUsername)}
                       </td>
                       {CREATIVE_METRICS.map((key) => (
                         <td key={key} className="tabular px-2 py-1.5 text-right">

@@ -244,6 +244,7 @@ export const creativesResponseSchema = z.object({
       campaign_name: textField,
       title: textField,
       tt_account_name: textField,
+      tt_account_username: textField,
       authorization_type: textField,
       shop_content_type: shopContentTypeSchema,
       creative_delivery_status: textField,

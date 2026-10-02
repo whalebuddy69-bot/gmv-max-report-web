@@ -16,6 +16,7 @@ function row(overrides: Partial<ReportRow>): ReportRow {
     itemId: "vid-1",
     title: "Video 1",
     ttAccountName: "creator.a",
+    ttAccountUsername: "creator.a",
     authorizationType: null,
     shopContentType: "VIDEO",
     creativeDeliveryStatus: null,

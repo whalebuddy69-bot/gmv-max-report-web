@@ -7,7 +7,8 @@ vi.mock("./client", () => ({
   request: (...args: unknown[]) => requestMock(...args),
 }));
 
-const { fetchAllCreatives, MAX_PAGE_SIZE } = await import("./analytics");
+const { fetchAllCreatives, fetchCreatives, MAX_PAGE_SIZE } = await import("./analytics");
+const { creativesResponseSchema } = await import("./schemas");
 
 /** One wire-shaped creative row; only the id varies. */
 function wireRow(n: number) {
@@ -56,6 +57,13 @@ async function collect(total: number, hardLimit?: number) {
 }
 
 describe("fetchAllCreatives", () => {
+  it("maps both creator fields and accepts older responses without username", async () => {
+    const wire = { creatives: [{ ...wireRow(1), tt_account_name: "Display", tt_account_username: "real.handle" }, wireRow(2)], total: 2, limit: 100, offset: 0 };
+    requestMock.mockResolvedValue(creativesResponseSchema.parse(wire));
+    const result = await fetchCreatives({ from: "2026-09-22", to: "2026-10-02" });
+    expect(result.rows[0]).toMatchObject({ ttAccountName: "Display", ttAccountUsername: "real.handle" });
+    expect(result.rows[1]?.ttAccountUsername).toBeNull();
+  });
   it("makes a single request when everything fits in one page", async () => {
     const { result, calls } = await collect(400);
     expect(calls).toBe(1);

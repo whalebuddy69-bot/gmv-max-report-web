@@ -15,6 +15,7 @@ export const DIMENSIONS: readonly DimensionDescriptor[] = [
   { kind: "dimension", key: "itemId", label: "Post ID", minGrain: "creative", format: "text" },
   { kind: "dimension", key: "title", label: "Creative", minGrain: "creative", format: "text" },
   { kind: "dimension", key: "ttAccountName", label: "TikTok display name", minGrain: "creative", format: "text" },
+  { kind: "dimension", key: "ttAccountUsername", label: "TikTok username", minGrain: "creative", format: "text" },
   {
     kind: "dimension",
     key: "authorizationType",
