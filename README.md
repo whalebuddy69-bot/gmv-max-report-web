@@ -25,7 +25,7 @@ npm run deploy
 
 ## env
 
-- `VITE_API_BASE_URL` url ของ API ค่าของ production อยู่ใน `.env.production`
+- `VITE_API_BASE_URL` url ของ API ค่าของ production อยู่ใน `.env.production` ที่เก็บใน Git (เป็น URL สาธารณะ ไม่ใช่ secret) ห้ามใส่ token หรือ secret ในตัวแปร `VITE_*`
 - `VITE_PROXY_TARGET` ใช้ตอน dev อย่างเดียว
 
 ค่า `VITE_API_BASE_URL` ถูกฝังตอน build ถ้าเปลี่ยน url ต้อง build แล้ว deploy ใหม่ และอย่าลืมเพิ่มโดเมนของเว็บใน `CORS_ORIGINS` ฝั่ง API
