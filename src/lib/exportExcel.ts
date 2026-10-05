@@ -58,6 +58,8 @@ export interface ExportColumn<T> {
   value: (row: T) => string | number | null;
   /** Character width; falls back to a measurement of the data. */
   width?: number;
+  /** Trusted application formulas only (without =); value supplies the cached result. */
+  formula?: (row: T, context: { rowNumber: number; firstDataRow: number; lastDataRow: number }) => string | null;
 }
 
 interface SheetOptions {
@@ -144,13 +146,23 @@ export function buildSheet<T>(
 
   const dataStartRow = headerOffset + 1;
   for (const [columnIndex, column] of columns.entries()) {
-    if (column.format === "text") continue;
-    const numFmt = NUM_FMT[column.format];
+    if (column.format === "text" && !column.formula) continue;
+    const numFmt = column.format === "text" ? undefined : NUM_FMT[column.format];
 
     for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
       const address = XLSX.utils.encode_cell({ r: dataStartRow + rowIndex, c: columnIndex });
-      const cell = sheet[address] as XLSX.CellObject | undefined;
-      if (cell && cell.t === "n") cell.z = numFmt;
+      let cell = sheet[address] as XLSX.CellObject | undefined;
+      const formula = column.formula?.(rows[rowIndex]!, {
+        rowNumber: dataStartRow + rowIndex + 1,
+        firstDataRow: dataStartRow + 1,
+        lastDataRow: dataStartRow + rows.length,
+      });
+      if (formula) {
+        cell ??= { t: "s", v: "" };
+        cell.f = formula;
+        sheet[address] = cell;
+      }
+      if (cell && numFmt && (cell.t === "n" || formula)) cell.z = numFmt;
     }
   }
 

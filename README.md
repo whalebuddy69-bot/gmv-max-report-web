@@ -36,6 +36,18 @@ npm run deploy
 - `/` หน้ารายงาน มีแท็บ Product กับ LIVE, export Excel ได้
 - `/stores` ดูสถานะสิทธิ์ของแต่ละร้าน ขอสิทธิ์จาก TikTok และกด sync รายร้าน
 
+### Overall รายวัน
+
+ปุ่ม `ดาวน์โหลด Overall รายวัน` เหนือการ์ดสรุป ส่งออกหนึ่งแถวต่อวันตามช่วงที่เลือกและแถว Total
+ใช้ scope เดียวกับการ์ด: ร้าน, วันที่, Product/LIVE และ LIVE Creator ไม่ใช้ตัวกรองของตารางชิ้นงาน
+ไฟล์ใช้ข้อมูลรายวันที่ API มีอยู่แล้ว: Cost, SKU orders, Gross revenue, ROI, Cost per order
+และสำหรับ Product เพิ่ม Videos advertised, Videos with sales, Creators with sales
+Campaigns with data และ Live duration ยังไม่มีข้อมูลแยกรายวันใน endpoint นี้ จึงไม่ใส่ตัวเลขที่คาดเดา
+วันที่ไม่มีแถวข้อมูลจะเว้นว่างพร้อม Data status ส่วนวันนี้ระบุว่ายังไม่จบวัน
+Total ยอดเงิน/ออเดอร์ใช้สูตร SUM; ROI และ Cost per order คำนวณจากยอดรวม
+Total วิดีโอ/ครีเอเตอร์ใช้จำนวนไม่ซ้ำทั้งช่วงจาก summary API ไม่บวกจำนวนรายวันเข้าด้วยกัน
+วันที่เป็นเซลล์ date และตัวเลขไม่ถูกแปลงเป็นข้อความ จึงนำไปทำ daily trend ต่อได้
+
 ## โฟลเดอร์
 
 ```

@@ -24,7 +24,9 @@ import { rowMetricValue } from "@/lib/aggregate";
 import { makeFileName, type ExportColumn, type WorkbookSheet } from "@/lib/exportExcel";
 import { liveRoomExportColumns } from "@/lib/liveRoomColumns";
 import { dailyTotalsColumns } from "@/lib/dailyTotalsSheet";
-import { formatDimension, formatDurationSeconds } from "@/lib/format";
+import { formatDimension, formatDurationSeconds, toIsoDate } from "@/lib/format";
+import { datesInRange, overallDailySheet } from "@/lib/overallDailySheet";
+import { fetchOverallExport } from "@/api/overallExport";
 
 const DEFAULT_PAGE_SIZE = 50;
 
@@ -150,6 +152,18 @@ export function ReportDashboard() {
     };
   }
 
+  async function buildOverallSheets(): Promise<WorkbookSheet<never>[]> {
+    const data = await fetchOverallExport(range);
+    const storeLabel = filters.storeIds.length
+      ? filters.storeIds.map((id) => storeNames.get(id) ?? id).join(", ")
+      : "ทุกร้าน";
+    const sheet = overallDailySheet({
+      ...data, storeLabel, today: toIsoDate(new Date()),
+      creatorLabel: isLive && filters.identityId ? `LIVE Creator: ${filters.identityId}` : undefined,
+    });
+    return [{ ...sheet, rows: sheet.rows as never[], columns: sheet.columns as never[] }];
+  }
+
   async function buildSheets(
     onProgress: (fetched: number, total: number) => void,
   ): Promise<WorkbookSheet<never>[]> {
@@ -244,6 +258,23 @@ export function ReportDashboard() {
       <GlobalFilterBar />
 
       <div className="scrollbar-thin flex-1 space-y-4 overflow-y-auto p-4">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold">Overall · {SCOPE_LABEL[filters.promotionType]}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              ดาวน์โหลดรายวันตามร้าน ช่วงวันที่ และประเภทที่เลือก พร้อม Total ท้ายตาราง
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              ตัวเลขตามการ์ดสรุป ไม่ใช้ตัวกรองแคมเปญ/สินค้า/ชิ้นงาน · วันที่ไม่มีข้อมูลจะเว้นว่าง
+            </p>
+          </div>
+          <ExportButton
+            buildSheets={buildOverallSheets}
+            fileName={`gmv-max-overall-${filters.promotionType.toLowerCase()}_${range.from}_to_${range.to}.xlsx`}
+            rowCount={datesInRange(range.from, range.to).length}
+            label="ดาวน์โหลด Overall รายวัน"
+          />
+        </div>
         <SummaryCards
           summary={summaryQuery.data}
           isLoading={summaryQuery.isLoading}
