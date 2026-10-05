@@ -1,5 +1,6 @@
 import type { LiveRoomRow } from "@/types/report";
 import type { ExportColumn, ExportFormat } from "@/lib/exportExcel";
+import { parseDurationLabel } from "./format";
 
 export interface LiveRoomColumn extends ExportColumn<LiveRoomRow> {
   /** Stable id, so the table can special-case a cell without matching on its header. */
@@ -85,4 +86,17 @@ export function liveRoomColumns(options: {
   );
 
   return columns;
+}
+
+/** Keep the dashboard label, but export an additive Excel duration in the same column. */
+export function liveRoomExportColumns(
+  options: Parameters<typeof liveRoomColumns>[0],
+): ExportColumn<LiveRoomRow>[] {
+  return liveRoomColumns(options).map((column) => column.key === "liveDuration"
+    ? {
+        ...column,
+        format: "duration",
+        value: (row: LiveRoomRow) => row.durationSeconds ?? parseDurationLabel(row.liveDuration),
+      }
+    : column);
 }

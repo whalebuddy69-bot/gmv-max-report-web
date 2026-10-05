@@ -67,6 +67,14 @@ describe("buildSheet", () => {
     const cell = sheet.B3 as XLSX.CellObject | undefined;
     expect(cell?.v ?? null).toBeNull();
   });
+
+  it("does not turn missing or invalid duration seconds into plausible times", () => {
+    const invalid: (number | string | null)[] = [null, -1, NaN, Infinity, "502h 40m"];
+    const sheet = buildSheet(invalid, [{ header: "Duration", format: "duration", value: (value) => value }], {
+      sheetName: "Durations",
+    });
+    invalid.forEach((_, index) => expect(sheet[`A${index + 2}`]?.v ?? null).toBeNull());
+  });
 });
 
 describe("pivotToSheet", () => {

@@ -6,7 +6,7 @@ import { formatDimension } from "./format";
 import { cellKey } from "./pivotKeys";
 
 /** What a column can be written as */
-export type ExportFormat = ValueFormat | "date" | "datetime" | "time";
+export type ExportFormat = ValueFormat | "date" | "datetime" | "time" | "duration";
 
 /** Excel number-format codes, one per non-text ExportFormat. */
 const NUM_FMT: Record<Exclude<ExportFormat, "text">, string> = {
@@ -19,6 +19,8 @@ const NUM_FMT: Record<Exclude<ExportFormat, "text">, string> = {
   date: "yyyy-mm-dd",
   datetime: "yyyy-mm-dd hh:mm:ss",
   time: "hh:mm:ss",
+  // Brackets keep elapsed hours above 24 instead of wrapping like a clock.
+  duration: "[h]:mm:ss",
 };
 
 const DATE_FORMATS = new Set<ExportFormat>(["date", "datetime", "time"]);
@@ -107,6 +109,12 @@ export function buildSheet<T>(
     matrix.push(
       columns.map((column) => {
         const value = column.value(row);
+        // Duration inputs are seconds; Excel stores elapsed time as fractions of a day.
+        if (column.format === "duration") {
+          return typeof value === "number" && Number.isFinite(value) && value >= 0
+            ? value / 86_400
+            : null;
+        }
         if (typeof value !== "string") return value;
 
         /*

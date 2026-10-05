@@ -1,7 +1,7 @@
 import * as XLSX from "xlsx";
 import { describe, expect, it } from "vitest";
 import type { LiveRoomRow } from "@/types/report";
-import { isNumericColumn, liveRoomColumns } from "./liveRoomColumns";
+import { isNumericColumn, liveRoomColumns, liveRoomExportColumns } from "./liveRoomColumns";
 import { buildSheet } from "./exportExcel";
 
 function room(over: Partial<LiveRoomRow> = {}): LiveRoomRow {
@@ -194,5 +194,52 @@ describe("liveRoomColumns", () => {
 
     const sheet = buildSheet([empty], liveRoomColumns(noStores), { sheetName: "Live rooms" });
     expect(sheet).toBeDefined();
+  });
+});
+
+describe("liveRoomExportColumns", () => {
+  it("preserves column order and all non-duration values", () => {
+    const display = liveRoomColumns(noStores);
+    const exported = liveRoomExportColumns(noStores);
+    expect(exported.map((column) => column.header)).toEqual(display.map((column) => column.header));
+    exported.forEach((column, index) => {
+      if (column.header === "live_duration") return;
+      expect(column.format).toBe(display[index]?.format);
+      expect(column.value(room())).toBe(display[index]?.value(room()));
+    });
+  });
+
+  it.each([false, true])("round-trips numeric elapsed durations (showStore=%s)", (showStore) => {
+    const columns = liveRoomExportColumns({ ...noStores, showStore });
+    const seconds = [502 * 3600 + 40 * 60, 25 * 3600 + 20 * 60 + 32, 32, 0];
+    const rows = seconds.map((durationSeconds) => room({ durationSeconds }));
+    rows.push(room({ liveDuration: null, durationSeconds: null }));
+    const sheet = buildSheet(rows, columns, { sheetName: "Live rooms", subtitle: "LIVE GMV Max" });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, "Live rooms");
+    const reopened = XLSX.read(XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }), {
+      type: "buffer", cellNF: true, cellDates: false,
+    }).Sheets["Live rooms"]!;
+    const durationIndex = columns.findIndex((column) => column.header === "live_duration");
+    const cells = seconds.map((_, index) => reopened[XLSX.utils.encode_cell({ r: index + 3, c: durationIndex })] as XLSX.CellObject);
+
+    cells.forEach((cell, index) => {
+      expect(cell.t).toBe("n");
+      expect(cell.v).toBeCloseTo(seconds[index]! / 86_400, 12);
+      expect(cell.z).toBe("[h]:mm:ss");
+    });
+    expect(cells.map((cell) => XLSX.utils.format_cell(cell))).toEqual(["502:40:00", "25:20:32", "0:00:32", "0:00:00"]);
+    // Numeric SUM keeps all seconds and does not wrap the combined hours at 24.
+    const sum = cells.reduce((total, cell) => total + Number(cell.v), 0);
+    expect(sum * 86_400).toBeCloseTo(seconds.reduce((a, b) => a + b, 0), 6);
+    expect(XLSX.SSF.format("[h]:mm:ss", sum)).toBe("528:01:04");
+    expect(reopened[XLSX.utils.encode_cell({ r: 7, c: durationIndex })]?.v ?? null).toBeNull();
+  });
+
+  it("falls back to the duration label only when seconds are missing", () => {
+    const column = liveRoomExportColumns(noStores).find((c) => c.header === "live_duration")!;
+    expect(column.value(room({ durationSeconds: null, liveDuration: "502h 40m" }))).toBe(1_809_600);
+    expect(column.value(room({ durationSeconds: 0, liveDuration: "1h" }))).toBe(0);
+    expect(column.value(room({ durationSeconds: null, liveDuration: "unknown" }))).toBeNull();
   });
 });

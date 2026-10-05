@@ -22,7 +22,7 @@ import { toRangeQuery, useFilterStore } from "@/store/filterStore";
 import { getMetric } from "@/lib/fieldCatalog";
 import { rowMetricValue } from "@/lib/aggregate";
 import { makeFileName, type ExportColumn, type WorkbookSheet } from "@/lib/exportExcel";
-import { liveRoomColumns } from "@/lib/liveRoomColumns";
+import { liveRoomExportColumns } from "@/lib/liveRoomColumns";
 import { dailyTotalsColumns } from "@/lib/dailyTotalsSheet";
 import { formatDimension, formatDurationSeconds } from "@/lib/format";
 
@@ -210,7 +210,7 @@ export function ReportDashboard() {
       {
         name: "Live rooms",
         rows: roomRows as never[],
-        columns: liveRoomColumns({
+        columns: liveRoomExportColumns({
           showStore: roomStoreCount > 1,
           storeNames,
           campaignNames,
