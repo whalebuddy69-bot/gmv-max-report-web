@@ -1,0 +1,102 @@
+.report-date-trigger[data-state="open"] {
+  border-color: #008f91;
+  box-shadow: 0 0 0 1px #008f91;
+}
+
+.report-date-popover {
+  --date-accent: #007d80;
+  --date-tint: #e2f1f1;
+  width: min(720px, calc(100vw - 24px));
+  max-height: var(--radix-popover-content-available-height);
+  overflow: auto;
+}
+.report-date-layout { display: flex; }
+.report-date-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 148px;
+  border-right: 1px solid var(--color-border);
+  padding: 12px;
+}
+.report-date-preset { background: var(--color-muted); font-size: 13px; }
+.report-date-preset[aria-pressed="true"] {
+  color: #00676a;
+  background: var(--date-tint);
+  box-shadow: inset 3px 0 var(--date-accent);
+}
+.report-date-main { min-width: 0; flex: 1; padding: 12px 16px; }
+.report-date-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px; }
+.report-date-inputs input:focus-visible { --tw-ring-color: var(--date-accent); }
+.report-date-inputs input[aria-invalid="true"] { border-color: var(--color-destructive); }
+.report-date-calendars { position: relative; }
+.report-date-navigation {
+  position: absolute;
+  inset: 4px 0 auto;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  z-index: 1;
+}
+.report-date-navigation button { width: 28px; height: 32px; pointer-events: auto; }
+.report-date-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-border);
+}
+.report-date-apply { background: var(--date-accent); color: white; }
+.report-date-apply:hover { background: #00676a; }
+.report-date-footer button { font-size: 13px; }
+
+/* Calendar-only overrides: do not change the dashboard's existing theme. */
+.report-date-popover .rdp-root {
+  --rdp-accent-color: var(--date-accent);
+  --rdp-accent-background-color: var(--date-tint);
+  --rdp-day-height: 36px;
+  --rdp-day-width: 36px;
+  --rdp-day_button-height: 34px;
+  --rdp-day_button-width: 34px;
+  --rdp-day_button-border-radius: 5px;
+  --rdp-selected-border: 2px solid transparent;
+  --rdp-disabled-opacity: 1;
+  --rdp-outside-opacity: 1;
+  --rdp-months-gap: 24px;
+  --rdp-nav-height: 40px;
+  --rdp-range_middle-background-color: transparent;
+  --rdp-range_middle-color: var(--color-foreground);
+  --rdp-range_start-background: transparent;
+  --rdp-range_end-background: transparent;
+}
+.report-date-popover .rdp-months { flex-wrap: nowrap; }
+.report-date-popover .rdp-month_caption { justify-content: center; font-size: 15px; }
+.report-date-popover .rdp-month_grid { border-collapse: separate; border-spacing: 0 2px; }
+.report-date-popover .rdp-day_button { font-size: 13px; margin: auto; }
+.report-date-popover .rdp-day_button:hover:not(:disabled) { background: var(--date-tint); color: #00676a; }
+.report-date-popover .rdp-day_button:focus-visible { outline: 2px solid var(--date-accent); outline-offset: 1px; }
+.report-date-popover .rdp-range_middle .rdp-day_button { background: var(--date-tint); border-radius: 5px; }
+.report-date-popover .rdp-disabled .rdp-day_button { background: #f3f4f5; color: #9ca3af; cursor: not-allowed; }
+.report-date-popover .rdp-outside:not(.rdp-selected) .rdp-day_button { color: #9ca3af; }
+.report-date-popover .rdp-today:not(.rdp-selected) .rdp-day_button { box-shadow: inset 0 0 0 1px var(--date-accent); }
+
+@media (max-width: 767px) {
+  .report-date-popover { width: min(360px, calc(100vw - 24px)); }
+  .report-date-layout { flex-direction: column; }
+  .report-date-presets {
+    flex: none;
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .report-date-preset { flex-shrink: 0; }
+  .report-date-preset[aria-pressed="true"] { box-shadow: inset 0 -2px var(--date-accent); }
+  .report-date-main { padding: 12px; }
+  .report-date-calendars { width: 252px; margin: auto; }
+  .report-date-inputs { gap: 8px; }
+  .report-date-inputs input { padding-inline: 8px; }
+  .report-date-footer { align-items: stretch; flex-direction: column; padding: 12px; }
+}
