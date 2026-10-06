@@ -163,7 +163,7 @@ export function DateRangePicker({ dateFrom, dateTo, onChange, className }: DateR
                   </div>
                 </nav>
                 <DayPicker mode="range" numberOfMonths={numberOfMonths} month={month} onMonthChange={showMonth}
-                  selected={selected} hideNavigation fixedWeeks showOutsideDays weekStartsOn={0}
+                  selected={selected} hideNavigation showOutsideDays weekStartsOn={0}
                   today={todayDate} disabled={{ after: todayDate }}
                   formatters={{ formatCaption: monthLabel }}
                   labels={{ labelDayButton: (date) => toIsoDate(date) }}
