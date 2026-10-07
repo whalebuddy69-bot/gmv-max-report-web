@@ -1,4 +1,4 @@
-
+import type { DeliveryStatusFilter } from "@/lib/creativeStatus";
 /** Fact-table grain. Creative is the finest and the only one carrying video fields. */
 export type Grain = "campaign" | "product" | "creative";
 
@@ -201,6 +201,8 @@ export interface CreativesResponse {
   rows: ReportRow[];
   /** Total matching creatives, for pagination. */
   total: number;
+  /** Whole-scope context counts before the status filter; null means unsupported/unverified. */
+  statusCounts: Record<string, number> | null;
   limit: number;
   offset: number;
 }
@@ -308,6 +310,8 @@ export interface RangeQuery {
 }
 
 export interface CreativesQuery extends RangeQuery {
+  /** Latest known status, independently of the performance date range. */
+  deliveryStatus?: DeliveryStatusFilter;
   accountName?: string;
   contentType?: ShopContentType;
   sort?: CreativeSortKey;

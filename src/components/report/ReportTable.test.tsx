@@ -26,18 +26,22 @@ describe("delivery status columns", () => {
     creativeDeliveryStatusCheckedAt: "2026-10-06T19:20:30Z", creativeDeliveryStatusStatDate: "2026-10-05",
   } as ReportRow;
 
-  it("exposes opt-in columns without changing the default table layout", () => {
+  it("shows delivery status and its checked-at time by default while source date stays optional", () => {
     const columns = reportExportColumns([row]).filter((column) => column.kind === "dimension");
     expect(columns.filter((column) => column.key.startsWith("creativeDeliveryStatus")).map((column) => column.header))
       .toEqual(["Latest known delivery status", "Status checked at (Asia/Bangkok)", "Status source report date"]);
     const html = renderToStaticMarkup(<ReportTable rows={[row]} isLoading={false} isFetching={false} error={null} onRetry={() => {}} sortBy="cost" sortDir="desc" onSortChange={() => {}} />);
-    expect(html).not.toContain("LEARNING");
-    expect(html).not.toContain("2026-10-07 02:20:30");
+    expect(html).toContain("Latest known delivery status");
+    expect(html).toContain("Status checked at (Asia/Bangkok)");
+    expect(html).toContain(">Learning</span>");
+    expect(html).toContain("2026-10-07 02:20:30");
+    expect(html).not.toContain(">Status source report date<");
   });
 
   it("renders status with a source date/sync-time explanation and legacy fallback", () => {
     const verified = renderToStaticMarkup(<CreativeStatusCell row={row} field="creativeDeliveryStatus" />);
-    expect(verified).toContain(">LEARNING</span>");
+    expect(verified).toContain(">Learning</span>");
+    expect(verified).toContain("กำลังเรียนรู้ (LEARNING)");
     expect(verified).toContain("Latest known delivery status");
     expect(verified).toContain("2026-10-05");
     expect(verified).toContain("ไม่ใช่ Exploration status");
@@ -48,7 +52,7 @@ describe("delivery status columns", () => {
     expect(renderToStaticMarkup(<CreativeStatusCell row={old} field="creativeDeliveryStatusCheckedAt" />)).toContain("(ยังไม่ทราบเวลาตรวจสอบ)");
   });
 
-  it("exports timezone-explicit freshness and labels legacy rows unverified", () => {
+  it("exports exact raw codes with timezone-explicit freshness and neutral legacy header", () => {
     const old = { ...row, creativeDeliveryStatusCheckedAt: undefined, creativeDeliveryStatusStatDate: undefined };
     const rows = [row, old];
     const columns = reportExportColumns(rows).flatMap((column) => column.kind === "dimension" && column.value
@@ -57,6 +61,15 @@ describe("delivery status columns", () => {
     const data = utils.sheet_to_json<string[]>(sheet, { header: 1, defval: null });
     expect(data[0]).toEqual(["Delivery status", "Status checked at (Asia/Bangkok)", "Status source report date"]);
     expect(data[1]).toEqual(["LEARNING", "2026-10-07 02:20:30 +07:00", "2026-10-05"]);
-    expect(data[2]).toEqual(["LEARNING (latest status not verified)", null, null]);
+    expect(data[2]).toEqual(["LEARNING", null, null]);
+  });
+
+  it("renders unknown and future statuses safely without guessing an Exploration state", () => {
+    const unknown = renderToStaticMarkup(<CreativeStatusCell row={{ ...row, creativeDeliveryStatus: null }} field="creativeDeliveryStatus" />);
+    expect(unknown).toContain(">Unknown</span>");
+    expect(unknown).toContain("API ยังไม่ส่งสถานะที่ทราบได้");
+    const future = renderToStaticMarkup(<CreativeStatusCell row={{ ...row, creativeDeliveryStatus: "NEW_STATE" }} field="creativeDeliveryStatus" />);
+    expect(future).toContain(">NEW_STATE</span>");
+    expect(future).toContain("ยังไม่มีคำอธิบายในระบบ");
   });
 });

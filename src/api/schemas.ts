@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { statusReportDateSchema, statusTimestampSchema } from "@/lib/creativeStatus";
+import { DELIVERY_STATUS_CATALOG, statusReportDateSchema, statusTimestampSchema } from "@/lib/creativeStatus";
 
 const numericField = z
   .union([z.number(), z.string(), z.null(), z.undefined()])
@@ -235,6 +235,14 @@ export const creatorsResponseSchema = z.object({
   ),
 });
 
+const STATUS_COUNT_KEYS = [...DELIVERY_STATUS_CATALOG.map((status) => status.value), "UNKNOWN", "OTHER"];
+
+/** Missing/partial/invalid counts are unknown, never fabricated zeros or a page tally. */
+export const creativeStatusCountsSchema = z.record(z.number().finite().int().nonnegative())
+  .refine((counts) => Object.keys(counts).length === STATUS_COUNT_KEYS.length
+    && STATUS_COUNT_KEYS.every((key) => Object.prototype.hasOwnProperty.call(counts, key)))
+  .nullable().catch(null);
+
 export const creativesResponseSchema = z.object({
   creatives: z.array(
     z.object({
@@ -261,6 +269,7 @@ export const creativesResponseSchema = z.object({
     }),
   ),
   total: z.number().int().min(0),
+  statusCounts: creativeStatusCountsSchema,
   limit: z.number().int().min(1),
   offset: z.number().int().min(0),
 });

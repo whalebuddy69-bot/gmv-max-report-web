@@ -273,6 +273,7 @@ export async function fetchCreatives(query: CreativesQuery): Promise<CreativesRe
   const params = rangeParams(query);
   if (query.accountName) params.accountName = query.accountName;
   if (query.contentType) params.contentType = query.contentType;
+  if (query.deliveryStatus) params.deliveryStatus = query.deliveryStatus;
   if (query.sort) params.sort = toWireSort(query.sort);
   if (query.direction) params.direction = query.direction.toUpperCase();
   if (query.limit !== undefined) params.limit = String(query.limit);
@@ -281,6 +282,13 @@ export async function fetchCreatives(query: CreativesQuery): Promise<CreativesRe
   const data = await request(creativesResponseSchema, "/analytics/creatives", () =>
     http.get("/analytics/creatives", { params }),
   );
+
+  const statusCounts = data.statusCounts ?? null;
+  // An older backend can silently ignore an unknown query parameter. Without the
+  // complete new counts contract, neither the table nor export may claim filtering.
+  if (query.deliveryStatus && statusCounts === null) {
+    throw new Error("API ยังไม่รองรับการกรอง Delivery status ที่ตรวจสอบได้ กรุณาโหลดข้อมูลใหม่หลังอัปเดตระบบ");
+  }
 
   const rows: ReportRow[] = data.creatives.map((c) => ({
     storeId: c.store_id,
@@ -309,7 +317,7 @@ export async function fetchCreatives(query: CreativesQuery): Promise<CreativesRe
     productClickRate: c.product_click_rate,
   }));
 
-  return { rows, total: data.total, limit: data.limit, offset: data.offset };
+  return { rows, total: data.total, statusCounts, limit: data.limit, offset: data.offset };
 }
 
 /** Fills `productName` from the products list */
@@ -371,5 +379,5 @@ export async function fetchAllCreatives(
     if (page.rows.length < MAX_PAGE_SIZE) break;
   }
 
-  return { rows: rows.slice(0, hardLimit), total: first.total, limit: MAX_PAGE_SIZE, offset: 0 };
+  return { rows: rows.slice(0, hardLimit), total: first.total, statusCounts: first.statusCounts, limit: MAX_PAGE_SIZE, offset: 0 };
 }

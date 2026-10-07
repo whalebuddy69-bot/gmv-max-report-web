@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { PromotionType, RangeQuery, ShopContentType } from "@/types/report";
 import { daysAgo, toIsoDate } from "@/lib/format";
+import type { DeliveryStatusFilter } from "@/lib/creativeStatus";
 
 interface FilterState {
   /** Empty means every store. */
@@ -19,6 +20,8 @@ interface FilterState {
   promotionType: PromotionType;
   /** TikTok identity_id. Live-only: Product campaigns have no creator of their own. */
   identityId: string | null;
+  /** Latest stored creative delivery state, independent of Overall metrics. */
+  deliveryStatus: DeliveryStatusFilter | null;
 
   setStoreIds: (storeIds: string[]) => void;
   setDateRange: (dateFrom: string, dateTo: string) => void;
@@ -28,6 +31,7 @@ interface FilterState {
   setContentType: (contentType: ShopContentType | "ALL") => void;
   setPromotionType: (promotionType: PromotionType) => void;
   setIdentityId: (identityId: string | null) => void;
+  setDeliveryStatus: (deliveryStatus: DeliveryStatusFilter | null) => void;
   clearFilters: () => void;
 }
 
@@ -43,6 +47,7 @@ function defaults() {
     contentType: "ALL" as const,
     promotionType: "PRODUCT" as const,
     identityId: null,
+    deliveryStatus: null,
   };
 }
 
@@ -54,7 +59,7 @@ export const useFilterStore = create<FilterState>()(
       // Narrowing filters name ids that only exist within one store, so changing the selection
       // clears them rather than sending a campaign id the new set never had
       setStoreIds: (storeIds) =>
-        set({ storeIds, campaignId: null, itemGroupId: null, accountName: null, identityId: null }),
+        set({ storeIds, campaignId: null, itemGroupId: null, accountName: null, identityId: null, deliveryStatus: null }),
 
       setDateRange: (dateFrom, dateTo) => set({ dateFrom, dateTo }),
       setCampaignId: (campaignId) => set({ campaignId }),
@@ -75,9 +80,11 @@ export const useFilterStore = create<FilterState>()(
           contentType: "ALL",
           // The creator picker is Live-only, and its ids mean nothing under Product.
           identityId: null,
+          deliveryStatus: null,
         }),
 
       setIdentityId: (identityId) => set({ identityId }),
+      setDeliveryStatus: (deliveryStatus) => set({ deliveryStatus }),
 
       // Store and date range survive: they scope which data exists at all, rather than
       // narrowing it, and re-picking them every time is a nuisance
@@ -88,6 +95,7 @@ export const useFilterStore = create<FilterState>()(
           accountName: null,
           contentType: "ALL",
           identityId: null,
+          deliveryStatus: null,
         }),
     }),
     {
@@ -120,6 +128,7 @@ export function countActiveFilters(state: {
   accountName: string | null;
   contentType: ShopContentType | "ALL";
   identityId: string | null;
+  deliveryStatus?: DeliveryStatusFilter | null;
 }): number {
   let count = 0;
   if (state.campaignId) count += 1;
@@ -127,5 +136,6 @@ export function countActiveFilters(state: {
   if (state.accountName) count += 1;
   if (state.contentType !== "ALL") count += 1;
   if (state.identityId) count += 1;
+  if (state.deliveryStatus) count += 1;
   return count;
 }

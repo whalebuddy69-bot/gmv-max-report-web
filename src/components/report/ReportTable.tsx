@@ -26,7 +26,7 @@ import { formatDimension, formatValue } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
   deliveryStatusExportValue, deliveryStatusHeader, deliveryStatusTooltip,
-  formatStatusCheckedAt, statusReportDateSchema,
+  formatStatusCheckedAt, getDeliveryStatusPresentation, statusReportDateSchema,
 } from "@/lib/creativeStatus";
 
 type ReportDimensionKey = DimensionKey | "creativeDeliveryStatusCheckedAt" | "creativeDeliveryStatusStatDate";
@@ -50,8 +50,8 @@ const DIMENSION_COLUMNS: ReadonlyArray<{
   { key: "shopContentType", header: "Creative type", size: 110 },
   { key: "campaignName", header: "Campaign name", size: 200, defaultHidden: true },
   { key: "authorizationType", header: "Authorization type", size: 150, defaultHidden: true },
-  { key: "creativeDeliveryStatus", header: "Delivery status", size: 220, defaultHidden: true },
-  { key: "creativeDeliveryStatusCheckedAt", header: "Status checked at (Asia/Bangkok)", size: 260, defaultHidden: true },
+  { key: "creativeDeliveryStatus", header: "Delivery status", size: 220 },
+  { key: "creativeDeliveryStatusCheckedAt", header: "Status checked at (Asia/Bangkok)", size: 260 },
   { key: "creativeDeliveryStatusStatDate", header: "Status source report date", size: 190, defaultHidden: true },
 ];
 
@@ -62,6 +62,10 @@ function dimensionColumns(rows: readonly ReportRow[]) {
 
 /** The tooltip keeps status freshness separate from both sales dates and Exploration. */
 export function CreativeStatusCell({ row, field }: { row: ReportRow; field: ReportDimensionKey }) {
+  if (field === "creativeDeliveryStatus") {
+    const status = getDeliveryStatusPresentation(row.creativeDeliveryStatus);
+    return <span className={cn("inline-flex max-w-full truncate rounded-full border px-2 py-0.5 text-xs font-medium", status.badgeClassName)} title={deliveryStatusTooltip(row)}>{status.label}</span>;
+  }
   const text = field === "creativeDeliveryStatusCheckedAt"
     ? formatStatusCheckedAt(row.creativeDeliveryStatusCheckedAt) ?? "(ยังไม่ทราบเวลาตรวจสอบ)"
     : field === "creativeDeliveryStatusStatDate"

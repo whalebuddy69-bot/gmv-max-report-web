@@ -80,11 +80,19 @@ src/store       zustand (auth, filter)
 
 ### Creative delivery status
 
-Product report columns optionally include delivery status, checked time and source report date; enable them in the column selector. Checked time is displayed in Asia/Bangkok (UTC+07, Gregorian calendar) and uses the same formatting on export.
+Product report shows delivery status and checked time by default; source report date is available in the column selector. Checked time is displayed in Asia/Bangkok (UTC+07, Gregorian calendar) and uses the same formatting on export.
 
 With the updated API, status is the latest known stored report-day status for the exact store/campaign/product/video context, independently of the selected performance date range. Checked time is when our system synced that source row, not when TikTok changed the status. Missing status stays unknown. Older API responses without provenance are labelled as unverified delivery status, never as verified latest status.
 
 This does not provide Exploration/Outstanding classification or recommend increasing budget. Newly preserved zero-activity rows are inventory; they do not increase the advertised-video KPI unless they have delivery activity.
+
+The detail filter offers all nine API values: `IN_QUEUE`, `LEARNING`, `DELIVERING`, `NOT_DELIVERYING` (API spelling), `AUTHORIZATION_NEEDED`, `EXCLUDED`, `UNAVAILABLE`, `REJECTED`, `NOT_ACTIVE`. Unknown covers null/blank/`-`/`0`/`-1`; Other preserves future unrecognized values. All options remain visible when their real count is zero. Counts come from the server across all matching creative-context rows before status filtering/pagination, not unique videos or the current page. With content type All, product cards are included. This is not every video in a shop; only contexts returned by TikTok and stored in the selected period exist here.
+
+Status filtering affects creative details and their Excel sheet only, not Overall/KPIs or the daily All sheet. Changing filters resets pagination. Exports retain the exact raw status code and label the selected filter. Older APIs without complete counts disable the selector; filtered requests/exports fail explicitly instead of silently returning unfiltered rows.
+
+The freshness panel separates the page's database-read time from shop sync times and each row's status check time. `รีเฟรชข้อมูลที่บันทึกไว้` performs authenticated GET requests only; it does not start TikTok sync. There is no new timer or upstream polling. Production currently syncs hourly; old contexts not returned in the rolling sync window can retain older checked-at times even after a shop sync succeeds.
+
+Before increasing upstream frequency, measure physical pages/retries and job duration, add app-wide rate limiting (current limiter is per advertiser/process), budget daily quota, and coordinate locks if using multiple replicas. Refreshing more often cannot remove TikTok's own source-data delay. See [TikTok rate limits](https://business-api.tiktok.com/portal/docs/rate-limits/v1.3) and [GMV Max field definitions](https://business-api.tiktok.com/portal/docs/metrics-in-gmv-max-campaign-reports/v1.3).
 
 ## deploy
 

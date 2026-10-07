@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CreativeSortKey, PromotionType, ReportRow, SortDirection } from "@/types/report";
 import { GlobalFilterBar } from "@/components/shared/GlobalFilterBar";
 import { ExportButton } from "@/components/shared/ExportButton";
@@ -6,6 +7,9 @@ import { Pagination } from "@/components/shared/Pagination";
 import { WarningList } from "@/components/shared/StateViews";
 import { SummaryCards, type ExtraCard } from "@/components/report/SummaryCards";
 import { ReportTable, reportExportColumns } from "@/components/report/ReportTable";
+import { DeliveryStatusPanel } from "@/components/report/DeliveryStatusPanel";
+import { ReportFreshness } from "@/components/report/ReportFreshness";
+import type { DeliveryStatusFilter } from "@/lib/creativeStatus";
 import { LiveRoomTable } from "@/components/report/LiveRoomTable";
 import { PromotionScopeSwitch } from "@/components/report/PromotionScopeSwitch";
 import { ProductCardPanel } from "@/components/report/ProductCardPanel";
@@ -27,6 +31,7 @@ import { dailyTotalsColumns } from "@/lib/dailyTotalsSheet";
 import { formatDimension, formatDurationSeconds, toIsoDate } from "@/lib/format";
 import { datesInRange, overallDailySheet } from "@/lib/overallDailySheet";
 import { fetchOverallExport } from "@/api/overallExport";
+import { fetchSyncStatus } from "@/api/sync";
 
 const DEFAULT_PAGE_SIZE = 50;
 
@@ -42,7 +47,7 @@ export function ReportDashboard() {
   const filters = useFilterStore();
   const range = toRangeQuery(filters);
 
-  const [page, setPage] = useState(1);
+  const [pageSelection, setPageSelection] = useState<{ scope: string; page: number } | null>(null);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [sortBy, setSortBy] = useState<CreativeSortKey>("cost");
   const [sortDir, setSortDir] = useState<SortDirection>("desc");
@@ -52,14 +57,31 @@ export function ReportDashboard() {
     ...range,
     accountName: filters.accountName ?? undefined,
     contentType: filters.contentType === "ALL" ? undefined : filters.contentType,
+    deliveryStatus: filters.deliveryStatus ?? undefined,
     sort: sortBy,
     direction: sortDir,
   };
+  // Reset before requesting rows when any scope changes; never request the old page
+  // of a newly selected status. Include page size so all transitions are deterministic.
+  const pageScope = JSON.stringify({ ...creativeFilters, pageSize });
+  const page = pageSelection?.scope === pageScope ? pageSelection.page : 1;
+  const setPage = (nextPage: number) => setPageSelection({ scope: pageScope, page: nextPage });
+  useEffect(() => {
+    // Commit the reset as well, so returning to a previous scope cannot resurrect
+    // its old page after the user has changed the filter.
+    setPageSelection({ scope: pageScope, page: 1 });
+  }, [pageScope]);
 
   /* Live GMV Max promotes a live room, so TikTok returns nothing for it below campaign level */
   const isLive = filters.promotionType === "LIVE";
 
   const storesQuery = useStores();
+  const queryClient = useQueryClient();
+  const syncQuery = useQuery({
+    queryKey: ["gmv", "syncStatus"], queryFn: fetchSyncStatus,
+    staleTime: 60_000, retry: 1,
+  });
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const summaryQuery = useSummary(range);
   const productsQuery = useProducts(range, { enabled: !isLive });
   const campaignsQuery = useCampaigns(range, { enabled: isLive });
@@ -68,6 +90,17 @@ export function ReportDashboard() {
     { ...creativeFilters, limit: pageSize, offset: (page - 1) * pageSize },
     { enabled: !isLive },
   );
+  const detailQuery = isLive ? liveRoomsQuery : creativesQuery;
+
+  async function refreshSavedData(): Promise<void> {
+    setIsRefreshing(true);
+    try {
+      // GETs only: no /sync/run and no extra TikTok calls from opening this page.
+      await queryClient.refetchQueries({ queryKey: ["gmv"], type: "active" });
+    } finally {
+      setIsRefreshing(false);
+    }
+  }
 
   const rows = useMemo(
     () =>
@@ -148,7 +181,7 @@ export function ReportDashboard() {
       name: "All",
       rows: days as never[],
       columns: dailyTotalsColumns({ content: !isLive }) as never[],
-      subtitle: `GMV Max ${SCOPE_LABEL[filters.promotionType]} · รายวัน · ${filters.dateFrom} ถึง ${filters.dateTo}`,
+      subtitle: `GMV Max ${SCOPE_LABEL[filters.promotionType]} · รายวัน · ${filters.dateFrom} ถึง ${filters.dateTo} · ไม่ใช้ตัวกรอง Delivery status`,
     };
   }
 
@@ -205,6 +238,7 @@ export function ReportDashboard() {
       filters.storeIds.length === 0 ? "ทุกร้าน" : `${filters.storeIds.length} ร้าน`,
       filters.accountName ? `Creator: ${filters.accountName}` : null,
       filters.contentType === "ALL" ? null : `ประเภท: ${filters.contentType}`,
+      `Delivery status filter: ${filters.deliveryStatus ?? "ALL"}`,
       all.total > exportRows.length
         ? `แสดง ${exportRows.length.toLocaleString("th-TH")} แถวแรกจาก ${all.total.toLocaleString("th-TH")} แถว`
         : `${exportRows.length.toLocaleString("th-TH")} แถว`,
@@ -260,6 +294,15 @@ export function ReportDashboard() {
       <GlobalFilterBar />
 
       <div className="scrollbar-thin flex-1 space-y-4 overflow-y-auto p-4">
+        <ReportFreshness
+          stores={storesQuery.data ?? []}
+          selectedStoreIds={filters.storeIds}
+          loadedAt={detailQuery.isPlaceholderData || detailQuery.isError ? null : detailQuery.dataUpdatedAt || null}
+          isFetching={isRefreshing || detailQuery.isFetching}
+          error={detailQuery.error?.message ?? summaryQuery.error?.message ?? storesQuery.error?.message ?? null}
+          onRefresh={() => void refreshSavedData()}
+          syncStatus={syncQuery.isError ? undefined : syncQuery.data}
+        />
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <h2 className="text-sm font-semibold">Overall · {SCOPE_LABEL[filters.promotionType]}</h2>
@@ -347,6 +390,14 @@ export function ReportDashboard() {
                 </p>
               </div>
             </div>
+
+            <DeliveryStatusPanel
+              value={filters.deliveryStatus}
+              onChange={(value) => filters.setDeliveryStatus(value as DeliveryStatusFilter | null)}
+              counts={creativesQuery.isPlaceholderData || creativesQuery.isError ? null : creativesQuery.data?.statusCounts ?? null}
+              isFetching={creativesQuery.isFetching}
+              disabled={creativesQuery.isFetching}
+            />
 
             <ReportTable
               rows={rows}
