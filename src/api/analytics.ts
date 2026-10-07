@@ -298,6 +298,8 @@ export async function fetchCreatives(query: CreativesQuery): Promise<CreativesRe
     authorizationType: c.authorization_type,
     shopContentType: c.shop_content_type,
     creativeDeliveryStatus: c.creative_delivery_status,
+    creativeDeliveryStatusCheckedAt: c.creative_delivery_status_checked_at,
+    creativeDeliveryStatusStatDate: c.creative_delivery_status_stat_date,
     cost: c.cost,
     orders: c.orders,
     grossRevenue: c.gross_revenue,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { statusReportDateSchema, statusTimestampSchema } from "@/lib/creativeStatus";
 
 const numericField = z
   .union([z.number(), z.string(), z.null(), z.undefined()])
@@ -248,6 +249,8 @@ export const creativesResponseSchema = z.object({
       authorization_type: textField,
       shop_content_type: shopContentTypeSchema,
       creative_delivery_status: textField,
+      creative_delivery_status_checked_at: statusTimestampSchema,
+      creative_delivery_status_stat_date: statusReportDateSchema,
       cost: numericField,
       orders: numericField,
       gross_revenue: numericField,

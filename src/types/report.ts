@@ -40,6 +40,10 @@ export interface ReportRow {
   authorizationType: string | null;
   shopContentType: ShopContentType | null;
   creativeDeliveryStatus: string | null;
+  /** Our sync timestamp, not the time TikTok changed this status. */
+  creativeDeliveryStatusCheckedAt?: string | null;
+  /** Source report date for the latest known status, independent of the metrics range. */
+  creativeDeliveryStatusStatDate?: string | null;
 
   cost: number | null;
   orders: number | null;

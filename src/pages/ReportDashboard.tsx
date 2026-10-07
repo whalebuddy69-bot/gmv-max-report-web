@@ -179,7 +179,7 @@ export function ReportDashboard() {
       storesQuery.data ?? [],
     );
 
-    const columns: ExportColumn<ReportRow>[] = reportExportColumns().map((column) => {
+    const columns: ExportColumn<ReportRow>[] = reportExportColumns(exportRows).map((column) => {
       if (column.kind === "metric") {
         const metric = getMetric(column.key);
         return {
@@ -192,6 +192,7 @@ export function ReportDashboard() {
         header: column.header,
         format: "text" as const,
         value: (row: ReportRow) => {
+          if (column.value) return column.value(row);
           const value = row[column.key];
           if (column.key === "itemId" && value === "-1") return "การ์ดสินค้า";
           return typeof value === "string" ? formatDimension(value) : null;
@@ -207,6 +208,7 @@ export function ReportDashboard() {
       all.total > exportRows.length
         ? `แสดง ${exportRows.length.toLocaleString("th-TH")} แถวแรกจาก ${all.total.toLocaleString("th-TH")} แถว`
         : `${exportRows.length.toLocaleString("th-TH")} แถว`,
+      "Delivery status = latest known only when check time/source date are available; independent of sales dates. Status checked at = our sync time (Asia/Bangkok), not TikTok status-change time",
     ]
       .filter(Boolean)
       .join(" · ");

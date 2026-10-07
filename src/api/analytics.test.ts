@@ -57,6 +57,22 @@ async function collect(total: number, hardLimit?: number) {
 }
 
 describe("fetchAllCreatives", () => {
+  it("maps new status provenance while old/invalid provenance remains unknown", async () => {
+    const wire = {
+      creatives: [
+        { ...wireRow(1), creative_delivery_status: "LEARNING", creative_delivery_status_checked_at: "2026-10-07T01:00:00Z", creative_delivery_status_stat_date: "2026-10-06" },
+        wireRow(2),
+        { ...wireRow(3), creative_delivery_status: "DELIVERING", creative_delivery_status_checked_at: "not-a-time", creative_delivery_status_stat_date: "2026-02-30" },
+        { ...wireRow(4), creative_delivery_status: null, creative_delivery_status_checked_at: "2026-10-07T01:00:00Z", creative_delivery_status_stat_date: "2026-10-07" },
+      ], total: 4, limit: 100, offset: 0,
+    };
+    requestMock.mockResolvedValue(creativesResponseSchema.parse(wire));
+    const result = await fetchCreatives({ from: "2026-09-22", to: "2026-09-23" });
+    expect(result.rows[0]).toMatchObject({ creativeDeliveryStatus: "LEARNING", creativeDeliveryStatusCheckedAt: "2026-10-07T01:00:00Z", creativeDeliveryStatusStatDate: "2026-10-06" });
+    expect(result.rows[1]).toMatchObject({ creativeDeliveryStatusCheckedAt: null, creativeDeliveryStatusStatDate: null });
+    expect(result.rows[2]).toMatchObject({ creativeDeliveryStatus: "DELIVERING", creativeDeliveryStatusCheckedAt: null, creativeDeliveryStatusStatDate: null });
+    expect(result.rows[3]).toMatchObject({ creativeDeliveryStatus: null, creativeDeliveryStatusStatDate: "2026-10-07" });
+  });
   it("maps both creator fields and accepts older responses without username", async () => {
     const wire = { creatives: [{ ...wireRow(1), tt_account_name: "Display", tt_account_username: "real.handle" }, wireRow(2)], total: 2, limit: 100, offset: 0 };
     requestMock.mockResolvedValue(creativesResponseSchema.parse(wire));

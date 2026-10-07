@@ -70,6 +70,14 @@ src/pages       หน้าเว็บ
 src/store       zustand (auth, filter)
 ```
 
+### Creative delivery status
+
+Product report columns optionally include delivery status, checked time and source report date; enable them in the column selector. Checked time is displayed in Asia/Bangkok (UTC+07, Gregorian calendar) and uses the same formatting on export.
+
+With the updated API, status is the latest known stored report-day status for the exact store/campaign/product/video context, independently of the selected performance date range. Checked time is when our system synced that source row, not when TikTok changed the status. Missing status stays unknown. Older API responses without provenance are labelled as unverified delivery status, never as verified latest status.
+
+This does not provide Exploration/Outstanding classification or recommend increasing budget. Newly preserved zero-activity rows are inventory; they do not increase the advertised-video KPI unless they have delivery activity.
+
 ## deploy
 
 `npm run build` แล้ว `npm run deploy` (wrangler) ต้อง login cloudflare ก่อนด้วย `npx wrangler login`

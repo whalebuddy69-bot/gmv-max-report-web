@@ -24,9 +24,15 @@ import { getMetric } from "@/lib/fieldCatalog";
 import { rowMetricValue } from "@/lib/aggregate";
 import { formatDimension, formatValue } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import {
+  deliveryStatusExportValue, deliveryStatusHeader, deliveryStatusTooltip,
+  formatStatusCheckedAt, statusReportDateSchema,
+} from "@/lib/creativeStatus";
+
+type ReportDimensionKey = DimensionKey | "creativeDeliveryStatusCheckedAt" | "creativeDeliveryStatusStatDate";
 
 const DIMENSION_COLUMNS: ReadonlyArray<{
-  key: DimensionKey;
+  key: ReportDimensionKey;
   header: string;
   size: number;
   defaultHidden?: boolean;
@@ -44,7 +50,25 @@ const DIMENSION_COLUMNS: ReadonlyArray<{
   { key: "shopContentType", header: "Creative type", size: 110 },
   { key: "campaignName", header: "Campaign name", size: 200, defaultHidden: true },
   { key: "authorizationType", header: "Authorization type", size: 150, defaultHidden: true },
+  { key: "creativeDeliveryStatus", header: "Delivery status", size: 220, defaultHidden: true },
+  { key: "creativeDeliveryStatusCheckedAt", header: "Status checked at (Asia/Bangkok)", size: 260, defaultHidden: true },
+  { key: "creativeDeliveryStatusStatDate", header: "Status source report date", size: 190, defaultHidden: true },
 ];
+
+function dimensionColumns(rows: readonly ReportRow[]) {
+  return DIMENSION_COLUMNS.map((column) => column.key === "creativeDeliveryStatus"
+    ? { ...column, header: deliveryStatusHeader(rows) } : column);
+}
+
+/** The tooltip keeps status freshness separate from both sales dates and Exploration. */
+export function CreativeStatusCell({ row, field }: { row: ReportRow; field: ReportDimensionKey }) {
+  const text = field === "creativeDeliveryStatusCheckedAt"
+    ? formatStatusCheckedAt(row.creativeDeliveryStatusCheckedAt) ?? "(ยังไม่ทราบเวลาตรวจสอบ)"
+    : field === "creativeDeliveryStatusStatDate"
+      ? statusReportDateSchema.parse(row.creativeDeliveryStatusStatDate) ?? "(ยังไม่ทราบวันที่ต้นทาง)"
+      : formatDimension(row.creativeDeliveryStatus);
+  return <span className="block truncate text-xs" title={deliveryStatusTooltip(row)}>{text}</span>;
+}
 
 /** `costPerOrder`, `ctr`, `cvr`, `cpc`, `cpm` and `aov` have no column in the response */
 const METRIC_COLUMNS: ReadonlyArray<{ key: MetricKey; size: number; defaultHidden?: boolean }> = [
@@ -102,13 +126,14 @@ export function ReportTable({
 }: ReportTableProps) {
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(initialVisibility);
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
+  const dimensions = useMemo(() => dimensionColumns(rows), [rows]);
 
   useEffect(() => {
     setColumnVisibility((current) => ({ ...current, storeName: showStoreColumn }));
   }, [showStoreColumn]);
 
   const columns = useMemo<ColumnDef<ReportRow>[]>(() => {
-    const dimensionDefs: ColumnDef<ReportRow>[] = DIMENSION_COLUMNS.map((column) => ({
+    const dimensionDefs: ColumnDef<ReportRow>[] = dimensions.map((column) => ({
       id: column.key,
       accessorKey: column.key,
       header: column.header,
@@ -116,6 +141,11 @@ export function ReportTable({
       enableResizing: true,
       cell: ({ row }) => {
         const value = row.original[column.key];
+
+        if (column.key === "creativeDeliveryStatus" || column.key === "creativeDeliveryStatusCheckedAt"
+          || column.key === "creativeDeliveryStatusStatDate") {
+          return <CreativeStatusCell row={row.original} field={column.key} />;
+        }
 
         if (column.key === "itemGroupId" && onSelectProduct) {
           return (
@@ -179,7 +209,7 @@ export function ReportTable({
     });
 
     return [...dimensionDefs, ...metricDefs];
-  }, [onSelectProduct]);
+  }, [onSelectProduct, dimensions]);
 
   const table = useReactTable({
     data: rows as ReportRow[],
@@ -220,7 +250,7 @@ export function ReportTable({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="max-h-96 overflow-y-auto">
               <DropdownMenuLabel>Dimensions</DropdownMenuLabel>
-              {DIMENSION_COLUMNS.map((column) => (
+              {dimensions.map((column) => (
                 <ColumnToggle key={column.key} table={table} columnId={column.key} label={column.header} />
               ))}
               <DropdownMenuSeparator className="my-1 h-px bg-border" />
@@ -365,11 +395,18 @@ function ColumnToggle({
 }
 
 /** Column set for the Excel export, mirroring what the table can show. */
-export function reportExportColumns(): ReadonlyArray<
-  { kind: "dimension"; key: DimensionKey; header: string } | { kind: "metric"; key: MetricKey }
+export function reportExportColumns(rows: readonly ReportRow[] = []): ReadonlyArray<
+  { kind: "dimension"; key: ReportDimensionKey; header: string; value?: (row: ReportRow) => string | null }
+  | { kind: "metric"; key: MetricKey }
 > {
   return [
-    ...DIMENSION_COLUMNS.map((c) => ({ kind: "dimension" as const, key: c.key, header: c.header })),
+    ...dimensionColumns(rows).map((c) => ({
+      kind: "dimension" as const, key: c.key, header: c.header,
+      value: c.key === "creativeDeliveryStatus" ? deliveryStatusExportValue
+        : c.key === "creativeDeliveryStatusCheckedAt" ? (row: ReportRow) => formatStatusCheckedAt(row.creativeDeliveryStatusCheckedAt)
+          : c.key === "creativeDeliveryStatusStatDate" ? (row: ReportRow) => statusReportDateSchema.parse(row.creativeDeliveryStatusStatDate)
+            : undefined,
+    })),
     ...METRIC_COLUMNS.map((c) => ({ kind: "metric" as const, key: c.key })),
   ];
 }
