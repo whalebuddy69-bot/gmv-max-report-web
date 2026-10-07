@@ -23,11 +23,20 @@ export function fetchSyncStatus(): Promise<SyncStatus> {
 
 const startSyncSchema = z.object({ started: z.boolean() });
 
+/** Explicit manual history overrides. Omit for the service's normal/new-store policy. */
+export type StoreSyncOptions =
+  | { lookbackDays: number; initialHistory?: never }
+  | { initialHistory: true; lookbackDays?: never };
+
 /** Kicks off one store and returns immediately */
-export async function startStoreSync(advertiserId: string, storeId: string): Promise<boolean> {
+export async function startStoreSync(
+  advertiserId: string,
+  storeId: string,
+  options?: StoreSyncOptions,
+): Promise<boolean> {
   try {
     await request(startSyncSchema, "/sync/run", () =>
-      http.post("/sync/run", { advertiserId, storeId }),
+      http.post("/sync/run", { advertiserId, storeId, ...options }),
     );
     return true;
   } catch (err) {

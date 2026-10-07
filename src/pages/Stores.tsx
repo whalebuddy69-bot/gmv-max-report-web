@@ -29,6 +29,8 @@ import { Input } from "@/components/ui/input";
 import { EmptyState, ErrorState, LoadingState, WarningList } from "@/components/shared/StateViews";
 import { createAuthorizeLink, fetchStoreAuthorization } from "@/api/analytics";
 import { fetchSyncStatus, startStoreSync, targetKey } from "@/api/sync";
+import type { StoreSyncOptions } from "@/api/sync";
+import { toApiError } from "@/api/client";
 import { formatDateLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -170,6 +172,7 @@ export function StoresPage() {
 
   /* Fetched once on load for the cron expression */
   const [pendingSync, setPendingSync] = useState<Map<string, number>>(new Map());
+  const [syncErrors, setSyncErrors] = useState<Map<string, string>>(new Map());
   const syncStatus = useQuery({
     queryKey: ["gmv", "syncStatus"],
     queryFn: fetchSyncStatus,
@@ -218,15 +221,26 @@ export function StoresPage() {
     void queryClient.invalidateQueries({ queryKey: ["gmv", "storeAuthorization"] });
   }, [runningTargets, pendingSync, queryClient, syncStatus.dataUpdatedAt]);
 
-  async function handleStoreSync(store: StoreAuthorizationRow): Promise<void> {
+  async function handleStoreSync(
+    store: StoreAuthorizationRow,
+    options?: StoreSyncOptions,
+  ): Promise<void> {
     const key = targetKey(store.advertiserId, store.storeId);
     // Recorded before the request resolves so the button disables on the click rather than a
     // round trip later
     const startedAt = Date.now();
+    setSyncErrors((current) => {
+      const next = new Map(current);
+      next.delete(key);
+      return next;
+    });
     setPendingSync((current) => new Map(current).set(key, startedAt));
     try {
-      await startStoreSync(store.advertiserId, store.storeId);
-    } catch {
+      await startStoreSync(store.advertiserId, store.storeId, options);
+    } catch (error) {
+      // Only display the normal user-facing message, never response details or request config.
+      const message = toApiError(error).message;
+      setSyncErrors((current) => new Map(current).set(key, message));
       setPendingSync((current) => {
         const next = new Map(current);
         next.delete(key);
@@ -414,7 +428,8 @@ export function StoresPage() {
                           pendingSync.has(targetKey(store.advertiserId, store.storeId)) ||
                           runningTargets.has(targetKey(store.advertiserId, store.storeId))
                         }
-                        onSync={() => void handleStoreSync(store)}
+                        onSync={(options) => void handleStoreSync(store, options)}
+                        syncError={syncErrors.get(targetKey(store.advertiserId, store.storeId))}
                         cron={cron}
                       />
                     ))}
@@ -532,13 +547,15 @@ function StoreRow({
   onToggle,
   isSyncing,
   onSync,
+  syncError,
   cron,
 }: {
   store: StoreAuthorizationRow;
   isExpanded: boolean;
   onToggle: () => void;
   isSyncing: boolean;
-  onSync: () => void;
+  onSync: (options?: StoreSyncOptions) => void;
+  syncError?: string;
   cron: string | undefined;
 }) {
   const style = STATUS_STYLES[store.status];
@@ -615,10 +632,12 @@ function StoreRow({
                 <p className="text-sm text-foreground/80">{store.reason}</p>
 
                 {store.syncEnabled !== null ? (
-                  <Button variant="outline" size="sm" onClick={onSync} disabled={isSyncing}>
-                    <RefreshCcw className={cn("h-3.5 w-3.5", isSyncing && "animate-spin")} aria-hidden />
-                    {isSyncing ? "กำลัง sync…" : "sync ร้านนี้ใหม่"}
-                  </Button>
+                  <StoreSyncControls
+                    isSyncing={isSyncing}
+                    hasSynced={Boolean(store.lastSyncedAt)}
+                    onSync={onSync}
+                    error={syncError}
+                  />
                 ) : null}
               </div>
 
@@ -669,6 +688,70 @@ function StoreRow({
         </tr>
       ) : null}
     </>
+  );
+}
+
+export type SyncHistoryChoice = "default" | "30-days" | "previous-month";
+
+/** Choosing a range is local-only; an explicit button click starts the backfill. */
+export function syncHistoryOptions(choice: SyncHistoryChoice): StoreSyncOptions | undefined {
+  if (choice === "30-days") return { lookbackDays: 30 };
+  if (choice === "previous-month") return { initialHistory: true };
+  return undefined;
+}
+
+export function StoreSyncControls({
+  isSyncing,
+  hasSynced,
+  onSync,
+  error,
+}: {
+  isSyncing: boolean;
+  hasSynced: boolean;
+  onSync: (options?: StoreSyncOptions) => void;
+  error?: string;
+}) {
+  const [history, setHistory] = useState<SyncHistoryChoice>("default");
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <label>
+          <span className="sr-only">ช่วงข้อมูลที่ต้องการ sync</span>
+          <select
+            className="h-8 max-w-full rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            value={history}
+            onChange={(event) => setHistory(event.target.value as SyncHistoryChoice)}
+            disabled={isSyncing}
+          >
+            <option value="default">ช่วงปกติ (อัตโนมัติ)</option>
+            <option value="30-days">ย้อนหลัง 30 วัน</option>
+            <option value="previous-month">ตั้งแต่วันที่ 1 เดือนก่อน</option>
+          </select>
+        </label>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => onSync(syncHistoryOptions(history))}
+          disabled={isSyncing}
+        >
+          <RefreshCcw className={cn("h-3.5 w-3.5", isSyncing && "animate-spin")} aria-hidden />
+          {isSyncing ? "กำลัง sync…" : "sync ร้านนี้ใหม่"}
+        </Button>
+      </div>
+      <p className="max-w-md text-xs text-muted-foreground">
+        {!hasSynced && history === "default"
+          ? "Sync ครั้งแรก: ตั้งแต่วันที่ 1 เดือนก่อนถึงวันนี้"
+          : history === "default"
+            ? "อัปเดตช่วงล่าสุดตามรอบปกติ เลือกช่วงย้อนหลังเพื่อเติมข้อมูลเก่า"
+            : "รวมวันนี้ · ช่วงย้อนหลังอาจใช้เวลานานขึ้น · กด sync เพื่อเริ่ม"}
+      </p>
+      {error ? (
+        <p role="alert" className="max-w-md break-words text-xs text-destructive">
+          เริ่ม sync ไม่สำเร็จ: {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
