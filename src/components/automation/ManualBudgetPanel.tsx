@@ -1,37 +1,37 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, LockKeyhole, RefreshCw, SlidersHorizontal } from "lucide-react";
-import type { AutomationClient } from "@/api/automation";
-import { confirmBudgetChange, fetchBudgetStatus, prepareBudgetChange, readBudgetOperation, type AutomationBudgetOperation, type AutomationBudgetPreparation } from "@/api/automationBudget";
+import { PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
+import { confirmBudgetChange, fetchBudgetStatus, prepareBudgetChange, readBudgetOperation, SRIHIW_CAP_CLIENT_ID, type AutomationBudgetOperation, type AutomationBudgetPreparation, type BudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BANGKOK } from "@/lib/automation";
-import { budgetResultMatches, canConfirmBudget, canPrepareBudget, freshBudgetCap, isTerminalBudgetResult, parseBudgetBaht, preparationMatchesRequest, validDirection, type BudgetDirection } from "@/lib/automationBudget";
+import { budgetResultMatches, canConfirmBudget, canPrepareBudget, formatBudgetBaht as money, freshBudgetCap, isTerminalBudgetResult, parseBudgetBaht, preparationMatchesRequest, validDirection, type BudgetDirection } from "@/lib/automationBudget";
+import { BudgetCapEditor, SrihiwBudgetCapPanel } from "./BudgetCapEditor";
 
-const bahtNumber = new Intl.NumberFormat("th-TH", { maximumFractionDigits: 0 });
-const money = (minor: number) => {
-  const amount = BigInt(minor);
-  return `฿${bahtNumber.format(amount / 100n)}.${String(amount % 100n).padStart(2, "0")}`;
-};
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, timeStyle: "medium" });
 const formatTime = (value: string) => time.format(new Date(value));
 const STORAGE_PREFIX = "gmv-max-automation-budget-operation-v1:";
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const CAP_QUERY_KEY = "budget-status";
 
-function savedOperation(userId: number): string | null {
+function operationStorageKey(userId: number, clientId: BudgetCapClientId): string {
+  return `${STORAGE_PREFIX}${userId}${clientId === PILOT_BUDGET_CLIENT_ID ? "" : `:${clientId}`}`;
+}
+
+function savedOperation(userId: number, clientId: BudgetCapClientId): string | null {
   try {
-    const value = sessionStorage.getItem(`${STORAGE_PREFIX}${userId}`);
+    const value = sessionStorage.getItem(operationStorageKey(userId, clientId));
     return value && UUID.test(value) ? value : null;
   } catch { return null; }
 }
 
 // Persist only the opaque request ID, not financial data or user credentials.
-function saveOperation(userId: number, operationId: string | null) {
+function saveOperation(userId: number, clientId: BudgetCapClientId, operationId: string | null) {
   try {
-    const key = `${STORAGE_PREFIX}${userId}`;
+    const key = operationStorageKey(userId, clientId);
     if (operationId) sessionStorage.setItem(key, operationId);
     else sessionStorage.removeItem(key);
   } catch { /* Private-mode storage can be disabled. The backend still guards replay. */ }
@@ -96,27 +96,31 @@ export function BudgetOutcome({ operationId, result }: { operationId: string; re
   );
 }
 
-export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active = true }: {
+export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active = true, clientId = PILOT_BUDGET_CLIENT_ID }: {
   userId: number;
   clients: AutomationClient[];
   onRefreshCampaign: () => void;
   active?: boolean;
+  clientId?: BudgetCapClientId;
 }) {
+  const titleId = useId();
+  const inputId = useId();
   const [now, setNow] = useState(Date.now);
   const [direction, setDirection] = useState<BudgetDirection | null>(null);
   const [amount, setAmount] = useState("");
   const [review, setReview] = useState<AutomationBudgetPreparation | null>(null);
   const [nativeOff, setNativeOff] = useState(false);
   const [noConcurrentChanges, setNoConcurrentChanges] = useState(false);
-  const [operationId, setOperationId] = useState<string | null>(() => savedOperation(userId));
+  const [operationId, setOperationId] = useState<string | null>(() => savedOperation(userId, clientId));
   const [result, setResult] = useState<AutomationBudgetOperation | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [pending, setPending] = useState<"prepare" | "confirm" | "check" | null>(null);
+  const [editingCap, setEditingCap] = useState(false);
   const busy = useRef(false);
   const attemptedOperation = useRef(operationId);
   const query = useQuery({
-    queryKey: ["automation", CAP_QUERY_KEY, userId],
-    queryFn: ({ signal }) => fetchBudgetStatus(signal),
+    queryKey: ["automation", CAP_QUERY_KEY, userId, clientId],
+    queryFn: ({ signal }) => fetchBudgetStatus(signal, clientId),
     enabled: active,
     gcTime: 0,
     retry: false,
@@ -125,14 +129,17 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
     refetchInterval: (state) => !active || denied(state.state.error) ? false : 20_000,
   });
   const status = query.isSuccess ? query.data : null;
-  const client = status ? clients.find((value) => value.clientId === status.clientId) ?? null : null;
-  const visibleMode = client ? status?.mode ?? "disabled" : "disabled";
+  const client = clients.find((value) => value.clientId === clientId) ?? null;
+  const allowedMode = client?.budgetControlAvailable !== false && (status?.mode === "live" || (clientId === PILOT_BUDGET_CLIENT_ID && status?.mode === "dry-run"));
   const campaign = client?.campaign;
-  const enabled = canPrepareBudget(status, client, now);
+  const enabled = active && allowedMode && canPrepareBudget(status, client, now);
+  const visibleMode = clientId === PILOT_BUDGET_CLIENT_ID && allowedMode ? status?.mode ?? "disabled" : enabled ? "live" : "disabled";
   const cap = client && freshBudgetCap(status, now) ? status?.cap ?? null : null;
-  const readyToConfirm = !!review && canConfirmBudget(review, status, client, now);
+  const readyToConfirm = active && allowedMode && !!review && canConfirmBudget(review, status, client, now);
   const terminal = result !== null && isTerminalBudgetResult(result.status);
   const actualMode = review?.mode === "live";
+  const displayName = client?.displayName ?? (clientId === SRIHIW_CAP_CLIENT_ID ? "srihiw" : "Ppan");
+  const capEditorBlocked = !!operationId || !!review || pending !== null;
 
   useEffect(() => {
     if (!active) return;
@@ -151,14 +158,19 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
   }
 
   function startDraft(next: BudgetDirection) {
-    if (busy.current || attemptedOperation.current || !canPrepareBudget(status, client, Date.now())) return;
+    if (!active || !allowedMode || busy.current || editingCap || attemptedOperation.current || !canPrepareBudget(status, client, Date.now())) return;
     clearDraft();
     setDirection(next);
   }
 
+  function editCap(editing: boolean) {
+    if (editing) clearDraft();
+    setEditingCap(editing);
+  }
+
   async function prepare(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy.current || attemptedOperation.current || review || !status || !campaign || !direction || !canPrepareBudget(status, client, Date.now())) return;
+    if (!active || !allowedMode || busy.current || editingCap || attemptedOperation.current || review || !status || !campaign || !direction || !canPrepareBudget(status, client, Date.now())) return;
     const target = parseBudgetBaht(amount);
     if (target === null) { setErrorText("กรอกงบเป็นบาทมากกว่า 0 และไม่เกิน 2 ตำแหน่งทศนิยม"); return; }
     if (!validDirection(target, campaign.dailyBudgetMinor, direction)) {
@@ -173,7 +185,7 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
     setPending("prepare");
     setErrorText(null);
     try {
-      const prepared = await prepareBudgetChange(input);
+      const prepared = await prepareBudgetChange(input, clientId);
       if (!preparationMatchesRequest(prepared, input, status, Date.now())) {
         setErrorText("รายการที่ได้รับไม่ตรงกับงบหรือเพดานที่เห็น จึงยังไม่เปิดให้ยืนยัน");
         void query.refetch();
@@ -204,17 +216,17 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
   }
 
   async function confirm() {
-    if (busy.current || attemptedOperation.current || !review || !nativeOff || !noConcurrentChanges || !canConfirmBudget(review, status, client, Date.now())) return;
+    if (!active || !allowedMode || busy.current || editingCap || attemptedOperation.current || !review || !nativeOff || !noConcurrentChanges || !canConfirmBudget(review, status, client, Date.now())) return;
     busy.current = true;
     const id = review.operationId;
     // A refresh or dropped connection must not offer a second POST for this operation.
     attemptedOperation.current = id;
-    saveOperation(userId, id);
+    saveOperation(userId, clientId, id);
     setOperationId(id);
     setPending("confirm");
     setErrorText(null);
     try {
-      acceptResult(await confirmBudgetChange(id), id);
+      acceptResult(await confirmBudgetChange(id, clientId), id);
     } catch {
       setErrorText("ไม่สามารถยืนยันผลจากการเชื่อมต่อครั้งนี้ได้ กรุณาใช้ปุ่มตรวจสอบผล ไม่ส่งคำสั่งเดิมซ้ำ");
     } finally {
@@ -229,7 +241,7 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
     setPending("check");
     setErrorText(null);
     try {
-      acceptResult(await readBudgetOperation(operationId), operationId);
+      acceptResult(await readBudgetOperation(operationId, undefined, clientId), operationId);
     } catch {
       setErrorText("ยังอ่านผลของรายการนี้ไม่ได้ กรุณาตรวจใน TikTok Ads Manager หรือแจ้งรหัสรายการให้ผู้ดูแล");
     } finally {
@@ -240,7 +252,7 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
 
   function closeResult() {
     if (busy.current || !terminal) return;
-    saveOperation(userId, null);
+    saveOperation(userId, clientId, null);
     attemptedOperation.current = null;
     setOperationId(null);
     setResult(null);
@@ -248,25 +260,24 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
   }
 
   return (
-    <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-labelledby="automation-budget">
+    <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-labelledby={titleId}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="automation-budget" className="flex items-center gap-2 text-base font-semibold"><SlidersHorizontal className="h-4 w-4" aria-hidden /> ปรับงบจากเว็บ</h2>
-          <p className="mt-1 text-sm text-muted-foreground">ตรวจเพดานและยืนยันทีละรายการสำหรับ {client?.displayName ?? "Creator ที่ได้รับสิทธิ์"} · LINE ใช้แจ้งเตือน ไม่ใช้สั่งปรับงบ</p>
+          <h2 id={titleId} className="flex items-center gap-2 text-base font-semibold"><SlidersHorizontal className="h-4 w-4" aria-hidden /> ปรับงบจากเว็บ</h2>
+          <p className="mt-1 text-sm text-muted-foreground">ตรวจเพดานและยืนยันทีละรายการสำหรับ {displayName} · LINE ใช้แจ้งเตือน ไม่ใช้สั่งปรับงบ</p>
         </div>
         <Badge variant={visibleMode === "live" ? "warning" : "secondary"}>
           {visibleMode === "live" ? "โหมดส่งคำสั่งจริง" : visibleMode === "dry-run" ? "ทดลอง · ไม่แก้งบจริง" : "ยังไม่เปิดสิทธิ์สั่งงาน"}
         </Badge>
       </div>
 
-      {cap ? (
-        <dl className="mt-4 grid gap-2 rounded-md border border-border p-3 text-sm sm:grid-cols-2">
-          <div><dt className="text-muted-foreground">เพดานต่อแคมเปญ</dt><dd className="font-medium tabular">{money(cap.campaignCapMinor)}</dd></div>
-          <div><dt className="text-muted-foreground">เพดานรวมวันนี้</dt><dd className="font-medium tabular">{money(cap.clientDailyCapMinor)}</dd></div>
-          <div className="text-xs text-muted-foreground sm:col-span-2"><dt className="sr-only">ที่มาและเวลา</dt><dd>อ้างอิงเพดานที่ตั้งไว้ในระบบเดิม · อ่าน {formatTime(cap.readAt)} น. เวลาไทย</dd></div>
-        </dl>
-      ) : <p className="mt-4 text-sm text-muted-foreground">{query.isPending ? "กำลังตรวจสิทธิ์และเพดาน…" : "ยังไม่มีเพดานล่าสุดที่ยืนยันได้"}</p>}
-      <p className="mt-2 text-xs text-muted-foreground">แก้เพดาน Ppan ผ่าน LINE ที่จับคู่ไว้ด้วย <code>ตั้งเพดาน Ppan [จำนวนบาท]</code> แล้วกดยืนยัน เว็บนี้ยังแสดงเพดานแบบอ่านอย่างเดียว</p>
+      <div className="mt-4">
+        {clientId === SRIHIW_CAP_CLIENT_ID ? (
+          <SrihiwBudgetCapPanel active={active} userId={userId} displayName={displayName} blocked={capEditorBlocked} onEditingChange={editCap} refreshBudgetStatus={query.refetch} />
+        ) : <BudgetCapEditor active={active} clientId={PILOT_BUDGET_CLIENT_ID} displayName={displayName}
+          status={client ? status : null} loading={query.isPending} refreshStatus={query.refetch}
+          blocked={capEditorBlocked} onEditingChange={editCap} />}
+      </div>
 
       {operationId ? (
         <div className="mt-4 space-y-2">
@@ -294,7 +305,7 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
             <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null} onClick={clearDraft}>ปิดแบบร่าง</Button>
           </div>
         </div>
-      ) : (
+      ) : !editingCap ? (
         <div className="mt-4 space-y-3">
           {!enabled && <p className="flex items-start gap-2 text-xs text-muted-foreground"><LockKeyhole className="mt-px h-4 w-4 shrink-0" aria-hidden />{cap?.locked ? "มีรายการที่ยังต้องตรวจสอบ จึงยังไม่เปิดให้ปรับงบอีกครั้ง" : status?.mode === "disabled" ? "บัญชีนี้ยังไม่ได้เปิดสิทธิ์สั่งปรับงบ" : "ต้องยืนยันสิทธิ์ แคมเปญปัจจุบัน ยอดใช้ และเพดานล่าสุดก่อน"}</p>}
           <div className="flex flex-wrap gap-2">
@@ -304,8 +315,8 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
           </div>
           {direction && campaign && (
             <form onSubmit={(event) => void prepare(event)} className="space-y-2 rounded-md border border-border p-3">
-              <label htmlFor="automation-new-budget" className="block text-sm font-medium">งบใหม่เป็นบาท · ปัจจุบัน {money(campaign.dailyBudgetMinor)}</label>
-              <Input id="automation-new-budget" type="text" inputMode="decimal" autoComplete="off" maxLength={25} value={amount} onChange={(event) => setAmount(event.target.value)} disabled={!enabled || pending !== null} />
+              <label htmlFor={inputId} className="block text-sm font-medium">งบใหม่เป็นบาท · ปัจจุบัน {money(campaign.dailyBudgetMinor)}</label>
+              <Input id={inputId} type="text" inputMode="decimal" autoComplete="off" maxLength={25} value={amount} onChange={(event) => setAmount(event.target.value)} disabled={!enabled || pending !== null} />
               <p className="text-xs text-muted-foreground">การเตรียมรายการยังไม่ส่งคำสั่งไป TikTok</p>
               <div className="flex flex-wrap gap-2">
                 <Button type="submit" className="min-h-10" disabled={!enabled || pending !== null || !amount.trim()}>{pending === "prepare" ? "กำลังตรวจข้อมูล…" : "ตรวจและเตรียมรายการ"}</Button>
@@ -314,7 +325,7 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
             </form>
           )}
         </div>
-      )}
+      ) : null}
       {errorText && <p role="alert" className="mt-3 break-words text-sm text-destructive">{errorText}</p>}
     </section>
   );

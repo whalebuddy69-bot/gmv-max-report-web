@@ -1,16 +1,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AutomationClient } from "@/api/automation";
-import { budgetConfirmationSchema, budgetOperationSchema, budgetPreparationSchema, budgetStatusSchema, confirmBudgetChange, fetchBudgetStatus, prepareBudgetChange, readBudgetOperation, type AutomationBudgetPreparation, type AutomationBudgetStatus } from "@/api/automationBudget";
+import { PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
+import { budgetConfirmationSchema, budgetOperationSchema, budgetPreparationSchema, budgetStatusSchema, changeBudgetCap, confirmBudgetChange, fetchBudgetStatus, fetchSrihiwBudgetCapStatus, prepareBudgetChange, readBudgetOperation, SRIHIW_CAP_CLIENT_ID, type AutomationBudgetPreparation, type AutomationBudgetStatus } from "@/api/automationBudget";
 import { http } from "@/api/client";
-import { budgetResultMatches, canConfirmBudget, canPrepareBudget, freshBudgetCap, isTerminalBudgetResult, parseBudgetBaht, preparationMatchesRequest, validDirection } from "@/lib/automationBudget";
+import { budgetCapResultMatches, budgetResultMatches, canConfirmBudget, canConfirmBudgetCap, canEditBudgetCap, canPrepareBudget, freshBudgetCap, isTerminalBudgetResult, parseBudgetBaht, preparationMatchesRequest, validDirection } from "@/lib/automationBudget";
+import { BudgetCapEditor } from "./BudgetCapEditor";
 import { BudgetOutcome } from "./ManualBudgetPanel";
 
 const at = "2026-01-03T02:01:00.000Z";
 const now = Date.parse(at);
 const cap = { revision: 3, campaignCapMinor: 450_000, clientDailyCapMinor: 900_000, readAt: at, locked: false };
 const operationId = "09c37d02-c9a7-45b3-9e2f-d73462091ccb";
-const status: AutomationBudgetStatus = { clientId: "test-client", canPrepare: true, mode: "dry-run", cap };
+const status: AutomationBudgetStatus = { clientId: PILOT_BUDGET_CLIENT_ID, canPrepare: true, capEditAllowed: false, mode: "dry-run", cap };
 const campaign = { campaignId: "test-campaign", campaignName: "Synthetic", campaignStatus: "ACTIVE", currency: "THB", dailyBudgetMinor: 124_520, spendMinor: 40_012, targetRoi: null } as const;
 const client: AutomationClient = {
   clientId: status.clientId, advertiserId: "test-advertiser", tiktokAccountId: "test-tiktok", displayName: "Synthetic Creator",
@@ -110,5 +111,82 @@ describe("manual budget API contracts", () => {
     expect(get.mock.calls.map(([path]) => path)).toEqual(["/automation/budget/status", `/automation/budget/operations/${operationId}`]);
     await expect(readBudgetOperation("../unknown")).rejects.toThrow();
     expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it("scopes Srihiw budget reads and deliberate writes without falling back to Ppan", async () => {
+    const srihiw = { ...status, clientId: SRIHIW_CAP_CLIENT_ID, mode: "live" };
+    const get = vi.spyOn(http, "get").mockResolvedValueOnce({ data: srihiw }).mockResolvedValueOnce({ data: simulated }).mockResolvedValueOnce({ data: status });
+    const post = vi.spyOn(http, "post").mockResolvedValueOnce({ data: { ...prepared, mode: "live" } }).mockRejectedValueOnce(new Error("transport loss"));
+    await expect(fetchBudgetStatus(undefined, SRIHIW_CAP_CLIENT_ID)).resolves.toEqual(srihiw);
+    await expect(prepareBudgetChange(prepareInput, SRIHIW_CAP_CLIENT_ID)).resolves.toMatchObject({ mode: "live" });
+    await expect(confirmBudgetChange(operationId, SRIHIW_CAP_CLIENT_ID)).rejects.toThrow();
+    await expect(readBudgetOperation(operationId, undefined, SRIHIW_CAP_CLIENT_ID)).resolves.toEqual(simulated);
+    await expect(fetchBudgetStatus(undefined, SRIHIW_CAP_CLIENT_ID)).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    expect(post.mock.calls).toEqual([
+      ["/automation/budget/srihiw/prepare", prepareInput],
+      ["/automation/budget/srihiw/confirm", { operationId, nativeAutoOff: true, noConcurrentChanges: true }],
+    ]);
+    expect(get.mock.calls.map(([path]) => path)).toEqual([
+      "/automation/budget/srihiw/status", `/automation/budget/srihiw/operations/${operationId}`, "/automation/budget/srihiw/status",
+    ]);
+  });
+});
+
+describe("website budget cap", () => {
+  const singleCap = { ...cap, clientDailyCapMinor: cap.campaignCapMinor };
+  const editable = { ...status, mode: "disabled", canPrepare: false, capEditAllowed: true, cap: singleCap } as const;
+  const initialSrihiw = { clientId: SRIHIW_CAP_CLIENT_ID, capEditAllowed: true, cap: null } as const;
+  const review = { expectedRevision: 3, currentCapMinor: 450_000, capMinor: 300_000 };
+
+  it("requires explicit scope and fresh unlocked permission, independent of TikTok write mode", () => {
+    expect(canEditBudgetCap(editable, PILOT_BUDGET_CLIENT_ID, now)).toBe(true);
+    expect(canEditBudgetCap(status, PILOT_BUDGET_CLIENT_ID, now)).toBe(false);
+    expect(canEditBudgetCap(editable, SRIHIW_CAP_CLIENT_ID, now)).toBe(false);
+    expect(canEditBudgetCap({ ...editable, cap }, PILOT_BUDGET_CLIENT_ID, now)).toBe(false);
+    expect(canEditBudgetCap({ ...editable, cap: { ...singleCap, locked: true } }, PILOT_BUDGET_CLIENT_ID, now)).toBe(false);
+    expect(canEditBudgetCap(editable, PILOT_BUDGET_CLIENT_ID, now + 46_000)).toBe(false);
+    expect(budgetStatusSchema.parse({ ...editable, capEditAllowed: undefined }).capEditAllowed).toBe(false);
+  });
+
+  it("blocks stale or same-amount confirmation and only permits revision zero for first Srihiw cap", () => {
+    expect(canConfirmBudgetCap(review, editable, PILOT_BUDGET_CLIENT_ID, now)).toBe(true);
+    expect(canConfirmBudgetCap(review, { ...editable, cap: { ...singleCap, revision: 4 } }, PILOT_BUDGET_CLIENT_ID, now)).toBe(false);
+    expect(canConfirmBudgetCap({ ...review, capMinor: review.currentCapMinor }, editable, PILOT_BUDGET_CLIENT_ID, now)).toBe(false);
+    const first = { expectedRevision: 0, currentCapMinor: null, capMinor: 75_050 };
+    expect(canConfirmBudgetCap(first, initialSrihiw, SRIHIW_CAP_CLIENT_ID, now)).toBe(true);
+    expect(canConfirmBudgetCap(first, { ...initialSrihiw, cap: singleCap }, SRIHIW_CAP_CLIENT_ID, now)).toBe(false);
+    expect(canConfirmBudgetCap(first, { ...editable, cap: null }, PILOT_BUDGET_CLIENT_ID, now)).toBe(false);
+    expect(budgetCapResultMatches({ revision: 1, capMinor: first.capMinor }, first)).toBe(true);
+    expect(budgetCapResultMatches({ revision: 2, capMinor: first.capMinor }, first)).toBe(false);
+    expect(budgetCapResultMatches({ revision: 1, capMinor: first.capMinor - 1 }, first)).toBe(false);
+  });
+
+  it("renders the approved first-cap editor without implying a TikTok budget change", () => {
+    const props = { active: true, clientId: SRIHIW_CAP_CLIENT_ID, displayName: "Srihiw", loading: false, refreshStatus: async () => null } as const;
+    const available = renderToStaticMarkup(<BudgetCapEditor {...props} status={initialSrihiw} />);
+    expect(available).toContain("ยังไม่ได้ตั้งเพดานงบ");
+    expect(available).toContain("ตั้งเพดานงบ</button>");
+    expect(available).not.toContain("ยืนยันเพดานใหม่");
+    const denied = renderToStaticMarkup(<BudgetCapEditor {...props} status={{ ...initialSrihiw, capEditAllowed: false }} />);
+    expect(denied).not.toContain("ตั้งเพดานงบ</button>");
+    const mismatched = renderToStaticMarkup(<BudgetCapEditor {...props} status={editable} />);
+    expect(mismatched).not.toContain("แก้เพดานงบ");
+  });
+
+  it("sends only exact cap bodies, never repeats a lost response, and validates Srihiw scope", async () => {
+    const first = { expectedRevision: 0, capMinor: 75_050 };
+    const existing = { expectedRevision: 3, capMinor: 300_000 };
+    const get = vi.spyOn(http, "get").mockResolvedValueOnce({ data: initialSrihiw }).mockResolvedValueOnce({ data: editable });
+    const post = vi.spyOn(http, "post").mockResolvedValueOnce({ data: { capMinor: 300_000, revision: 4 } }).mockRejectedValueOnce(new Error("transport loss"));
+    await expect(fetchSrihiwBudgetCapStatus()).resolves.toEqual(initialSrihiw);
+    await expect(changeBudgetCap(PILOT_BUDGET_CLIENT_ID, existing)).resolves.toEqual({ capMinor: 300_000, revision: 4 });
+    await expect(changeBudgetCap(SRIHIW_CAP_CLIENT_ID, first)).rejects.toThrow();
+    await expect(changeBudgetCap(PILOT_BUDGET_CLIENT_ID, first)).rejects.toThrow();
+    await expect(changeBudgetCap(SRIHIW_CAP_CLIENT_ID, { ...first, capMinor: -1 })).rejects.toThrow();
+    await expect(fetchSrihiwBudgetCapStatus()).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    expect(post.mock.calls).toEqual([
+      ["/automation/budget/cap", existing], ["/automation/budget/cap/srihiw", first],
+    ]);
+    expect(get.mock.calls.map(([path]) => path)).toEqual(["/automation/budget/cap/srihiw", "/automation/budget/cap/srihiw"]);
   });
 });

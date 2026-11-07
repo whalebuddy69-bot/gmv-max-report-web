@@ -3,6 +3,7 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { Activity, ArrowDown, ArrowUp, ChevronDown, CirclePause, CirclePlay, Clock3, LockKeyhole, RefreshCw } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { fetchAutomationOverview, fetchAutomationPerformance, PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationCampaign, type AutomationPerformance } from "@/api/automation";
+import { SRIHIW_CAP_CLIENT_ID } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { ManualBudgetPanel } from "@/components/automation/ManualBudgetPanel";
 import { EmptyState, ErrorState, LoadingState } from "@/components/shared/StateViews";
@@ -249,7 +250,8 @@ function CreatorRow({ client, userId, now, eager, expanded, onToggle, onRefreshC
   const payload = performanceEnabled && query.isSuccess ? creatorRowPerformance(query.data, client, now) : null;
   const totals = payload?.state === "available" && payload.series.length > 0 ? summarizeCreatorPerformance(payload.series) : null;
   const spendPercent = campaign && campaign.spendMinor !== null ? 100 * campaign.spendMinor / campaign.dailyBudgetMinor : null;
-  const canShowPilotControls = client.clientId === PILOT_BUDGET_CLIENT_ID && client.budgetControlAvailable !== false;
+  const budgetClientId = client.clientId === SRIHIW_CAP_CLIENT_ID ? SRIHIW_CAP_CLIENT_ID
+    : client.clientId === PILOT_BUDGET_CLIENT_ID && client.budgetControlAvailable !== false ? PILOT_BUDGET_CLIENT_ID : null;
   const detailId = `automation-creator-detail-${client.clientId}`;
 
   return (
@@ -293,9 +295,9 @@ function CreatorRow({ client, userId, now, eager, expanded, onToggle, onRefreshC
       </div>
       <div id={detailId} hidden={!expanded} className="border-t border-border bg-muted/25 p-3 sm:p-4">
         {expanded && <CreatorDetails client={client} campaign={campaign} />}
-        {canShowPilotControls && <div className="mt-3">
-          <ManualBudgetPanel key={userId} userId={userId} active={expanded} clients={[client]} onRefreshCampaign={onRefreshCampaign} />
-          {expanded && campaign && <BudgetMeter campaign={campaign} />}
+        {budgetClientId && <div className="mt-3">
+          <ManualBudgetPanel key={`${userId}:${budgetClientId}`} userId={userId} clientId={budgetClientId} active={expanded} clients={[client]} onRefreshCampaign={onRefreshCampaign} />
+          {expanded && campaign && budgetClientId === PILOT_BUDGET_CLIENT_ID && <BudgetMeter campaign={campaign} />}
           {expanded && <ReadOnlyActions budgetPanel />}
         </div>}
         {expanded && campaign ? (

@@ -1,11 +1,18 @@
 import type { AutomationClient } from "@/api/automation";
-import type { AutomationBudgetOperation, AutomationBudgetPreparation, AutomationBudgetStatus, BudgetPrepareInput } from "@/api/automationBudget";
+import { SRIHIW_CAP_CLIENT_ID, type AutomationBudgetOperation, type AutomationBudgetPreparation, type AutomationBudgetStatus, type BudgetCapClientId, type BudgetCapInput, type BudgetCapResult, type BudgetCapStatus, type BudgetPrepareInput } from "@/api/automationBudget";
 import { bangkokDay, isFreshAutomationClient } from "./automation";
 
 export type BudgetDirection = "increase" | "decrease";
+export type BudgetCapReview = BudgetCapInput & { currentCapMinor: number | null };
 const MAX_CAP_AGE_MS = 45_000;
 const MAX_CLIENT_AGE_MS = 90_000;
 const MAX_CLOCK_SKEW_MS = 5_000;
+const bahtNumber = new Intl.NumberFormat("th-TH", { maximumFractionDigits: 0 });
+
+export function formatBudgetBaht(minor: number): string {
+  const amount = BigInt(minor);
+  return `฿${bahtNumber.format(amount / 100n)}.${String(amount % 100n).padStart(2, "0")}`;
+}
 
 /** Avoid floating-point money and ambiguous notation (e.g. exponential or misplaced commas). */
 export function parseBudgetBaht(value: string): number | null {
@@ -16,12 +23,30 @@ export function parseBudgetBaht(value: string): number | null {
   return minor > 0n && minor <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(minor) : null;
 }
 
-export function freshBudgetCap(status: AutomationBudgetStatus | null, now: number): boolean {
+export function freshBudgetCap(status: Pick<BudgetCapStatus, "cap"> | null, now: number): boolean {
   if (!status?.cap || !Number.isFinite(now)) return false;
   const readAt = Date.parse(status.cap.readAt);
   const age = now - readAt;
   return Number.isFinite(readAt) && age >= -MAX_CLOCK_SKEW_MS && age <= MAX_CAP_AGE_MS
     && bangkokDay(now) === bangkokDay(readAt);
+}
+
+/** Policy editing is independent of permission to send real TikTok budget commands. */
+export function canEditBudgetCap(status: BudgetCapStatus | null, clientId: BudgetCapClientId, now: number): boolean {
+  if (status?.clientId !== clientId || status.capEditAllowed !== true) return false;
+  if (!status.cap) return clientId === SRIHIW_CAP_CLIENT_ID;
+  return !status.cap.locked && status.cap.revision < Number.MAX_SAFE_INTEGER
+    && status.cap.campaignCapMinor === status.cap.clientDailyCapMinor && freshBudgetCap(status, now);
+}
+
+export function canConfirmBudgetCap(review: BudgetCapReview, status: BudgetCapStatus | null, clientId: BudgetCapClientId, now: number): boolean {
+  return canEditBudgetCap(status, clientId, now) && (status?.cap?.revision ?? 0) === review.expectedRevision
+    && (status?.cap?.campaignCapMinor ?? null) === review.currentCapMinor
+    && Number.isSafeInteger(review.capMinor) && review.capMinor > 0 && review.capMinor !== review.currentCapMinor;
+}
+
+export function budgetCapResultMatches(result: BudgetCapResult, input: BudgetCapInput): boolean {
+  return result.revision === input.expectedRevision + 1 && result.capMinor === input.capMinor;
 }
 
 export function canPrepareBudget(status: AutomationBudgetStatus | null, client: AutomationClient | null, now: number): boolean {
