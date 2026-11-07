@@ -38,6 +38,10 @@ const router = createBrowserRouter([
           // The builder is switched off
           { path: "analysis", element: <Navigate to="/" replace /> },
           { path: "stores", element: <StoresPage /> },
+          {
+            path: "automation",
+            lazy: async () => ({ Component: (await import("@/pages/Automation")).AutomationPage }),
+          },
         ],
       },
     ],
