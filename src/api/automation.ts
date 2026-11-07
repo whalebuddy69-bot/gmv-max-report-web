@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { http, request } from "./client";
+import { ApiError, http, request } from "./client";
 
 const instant = z.string().datetime({ offset: true });
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -7,6 +7,9 @@ const moneyMinor = z.number().int().safe().nonnegative();
 const positiveBudget = moneyMinor.positive();
 const label = z.string().trim().min(1).max(256);
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
+const creatorSlug = /^[a-z][a-z0-9_-]{1,39}$/;
+const creatorId = z.string().regex(creatorSlug);
+export const PILOT_BUDGET_CLIENT_ID = "punpan_020";
 const nullableRoi = z.number().finite().nonnegative().nullable();
 const campaignSchema = z.object({
   campaignId: id,
@@ -18,11 +21,14 @@ const campaignSchema = z.object({
   currency: z.literal("THB"),
 });
 const clientSchema = z.object({
-  clientId: id,
+  clientId: creatorId,
   displayName: label,
   advertiserId: id,
   tiktokAccountId: id,
+  tiktokAccountIdVerified: z.boolean().optional(),
   access: z.enum(["verified", "unavailable"]),
+  accessReason: z.enum(["needs-authorization", "identity-unverified", "upstream-unavailable"]).optional(),
+  budgetControlAvailable: z.boolean().optional(),
   observedAt: instant.nullable(),
   reportingDate: day.nullable(),
   campaign: campaignSchema.nullable(),
@@ -39,11 +45,14 @@ export const automationOverviewSchema = z.object({
   schemaVersion: z.literal(1),
   checkedAt: instant,
   coverage: z.literal("configured-creators-only"),
-  clients: z.array(clientSchema),
+  clients: z.array(clientSchema).max(100).refine(
+    (clients) => new Set(clients.map((client) => client.clientId)).size === clients.length,
+    "Creator IDs must be unique",
+  ),
 });
 
 const pointSchema = z.object({
-  hour: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
+  hour: z.string().regex(/^(?:[01]\d|2[0-3]):00$/),
   spendMinor: moneyMinor.nullable(),
   gmvMinor: moneyMinor.nullable(),
   orders: z.number().int().safe().nonnegative().nullable(),
@@ -54,7 +63,7 @@ export const automationPerformanceSchema = z.object({
   schemaVersion: z.literal(1),
   checkedAt: instant,
   observedAt: instant.nullable().default(null),
-  clientId: id,
+  clientId: creatorId,
   campaignId: id.nullable(),
   reportingDate: day.nullable(),
   granularity: z.literal("hour"),
@@ -77,8 +86,18 @@ export function fetchAutomationOverview(signal?: AbortSignal) {
   );
 }
 
-export function fetchAutomationPerformance(signal?: AbortSignal) {
-  return request(automationPerformanceSchema, "Automation performance", () =>
-    http.get("/automation/performance", { signal }),
-  );
+export function automationPerformancePath(clientId: string) {
+  if (!creatorSlug.test(clientId)) throw new ApiError("รหัส Creator ไม่ถูกต้อง", { code: "INVALID_CREATOR_SCOPE" });
+  return `/automation/performance/${clientId}`;
+}
+
+export async function fetchAutomationPerformance(clientId: string, signal?: AbortSignal) {
+  const path = automationPerformancePath(clientId);
+  try {
+    return await request(automationPerformanceSchema, "Automation performance", () => http.get(path, { signal }));
+  } catch (error) {
+    // Only the existing pilot has a legacy endpoint, never fall back for another Creator.
+    if (clientId !== PILOT_BUDGET_CLIENT_ID || signal?.aborted || !(error instanceof ApiError) || error.status !== 404) throw error;
+    return request(automationPerformanceSchema, "Automation performance", () => http.get("/automation/performance", { signal }));
+  }
 }

@@ -96,10 +96,11 @@ export function BudgetOutcome({ operationId, result }: { operationId: string; re
   );
 }
 
-export function ManualBudgetPanel({ userId, clients, onRefreshCampaign }: {
+export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active = true }: {
   userId: number;
   clients: AutomationClient[];
   onRefreshCampaign: () => void;
+  active?: boolean;
 }) {
   const [now, setNow] = useState(Date.now);
   const [direction, setDirection] = useState<BudgetDirection | null>(null);
@@ -116,11 +117,12 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign }: {
   const query = useQuery({
     queryKey: ["automation", CAP_QUERY_KEY, userId],
     queryFn: ({ signal }) => fetchBudgetStatus(signal),
+    enabled: active,
     gcTime: 0,
     retry: false,
     staleTime: 0,
     refetchOnWindowFocus: true,
-    refetchInterval: (state) => denied(state.state.error) ? false : 20_000,
+    refetchInterval: (state) => !active || denied(state.state.error) ? false : 20_000,
   });
   const status = query.isSuccess ? query.data : null;
   const client = status ? clients.find((value) => value.clientId === status.clientId) ?? null : null;
@@ -133,9 +135,11 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign }: {
   const actualMode = review?.mode === "live";
 
   useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [active]);
 
   function clearDraft() {
     setReview(null);
@@ -262,6 +266,7 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign }: {
           <div className="text-xs text-muted-foreground sm:col-span-2"><dt className="sr-only">ที่มาและเวลา</dt><dd>อ้างอิงเพดานที่ตั้งไว้ในระบบเดิม · อ่าน {formatTime(cap.readAt)} น. เวลาไทย</dd></div>
         </dl>
       ) : <p className="mt-4 text-sm text-muted-foreground">{query.isPending ? "กำลังตรวจสิทธิ์และเพดาน…" : "ยังไม่มีเพดานล่าสุดที่ยืนยันได้"}</p>}
+      <p className="mt-2 text-xs text-muted-foreground">แก้เพดาน Ppan ผ่าน LINE ที่จับคู่ไว้ด้วย <code>ตั้งเพดาน Ppan [จำนวนบาท]</code> แล้วกดยืนยัน เว็บนี้ยังแสดงเพดานแบบอ่านอย่างเดียว</p>
 
       {operationId ? (
         <div className="mt-4 space-y-2">

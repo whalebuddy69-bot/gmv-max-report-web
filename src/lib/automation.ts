@@ -38,6 +38,39 @@ export function isStalePerformance(result: AutomationPerformance, now = Date.now
   return !Number.isFinite(age) || age < -30_000 || age > MAX_CHART_OBSERVATION_AGE_MS;
 }
 
+/** Keep unverified timestamps, stale responses and mismatched account/campaign/day off the row. */
+export function creatorRowPerformance(result: AutomationPerformance | undefined, client: AutomationClient, now = Date.now()) {
+  if (!result || !isFreshAutomationClient(client, now) || !performanceMatchesClient(result, client)) return null;
+  if (result.state === "available" && (result.observedAt === null || isStalePerformance(result, now))) return null;
+  return result;
+}
+
+type SummableMetric = "spendMinor" | "gmvMinor" | "orders" | "liveViews";
+
+function totalForReturnedHours(series: readonly AutomationPoint[], metric: SummableMetric) {
+  if (series.length === 0) return null;
+  let total = 0;
+  for (const point of series) {
+    const value = point[metric];
+    if (value === null) return null;
+    total += value;
+    if (!Number.isSafeInteger(total)) return null;
+  }
+  return total;
+}
+
+/** Summary of returned hours only; an unreturned hour is not zero or an all-day total. */
+export function summarizeCreatorPerformance(series: readonly AutomationPoint[]) {
+  const spend = totalForReturnedHours(series, "spendMinor");
+  const gmvMinor = totalForReturnedHours(series, "gmvMinor");
+  return {
+    gmvMinor,
+    orders: totalForReturnedHours(series, "orders"),
+    roi: gmvMinor !== null && spend !== null && spend > 0 ? gmvMinor / spend : null,
+    liveViews: totalForReturnedHours(series, "liveViews"),
+  };
+}
+
 export type AutomationMetric = "spendMinor" | "gmvMinor" | "orders" | "roi" | "liveViews";
 
 const minutes = (hour: string) => Number(hour.slice(0, 2)) * 60 + Number(hour.slice(3));

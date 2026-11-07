@@ -1,22 +1,23 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Activity, ArrowDown, ArrowUp, CirclePause, CirclePlay, Clock3, LockKeyhole, RefreshCw, ShieldCheck } from "lucide-react";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { Activity, ArrowDown, ArrowUp, ChevronDown, CirclePause, CirclePlay, Clock3, LockKeyhole, RefreshCw } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { fetchAutomationOverview, fetchAutomationPerformance, type AutomationClient, type AutomationCampaign } from "@/api/automation";
+import { fetchAutomationOverview, fetchAutomationPerformance, PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationCampaign, type AutomationPerformance } from "@/api/automation";
 import { ApiError } from "@/api/client";
 import { ManualBudgetPanel } from "@/components/automation/ManualBudgetPanel";
 import { EmptyState, ErrorState, LoadingState } from "@/components/shared/StateViews";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { BANGKOK, formatHour, isFreshAutomationClient, isStalePerformance, performanceMatchesClient, toHourlyChart, type AutomationMetric } from "@/lib/automation";
+import { BANGKOK, creatorRowPerformance, formatHour, isFreshAutomationClient, summarizeCreatorPerformance, toHourlyChart, type AutomationMetric } from "@/lib/automation";
 import { formatCompact, formatValue } from "@/lib/format";
 import { useAuthStore } from "@/store/authStore";
 
 const number = new Intl.NumberFormat("th-TH", { maximumFractionDigits: 1 });
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, dateStyle: "medium", timeStyle: "short" });
 const formatTime = (date: string | null) => date === null ? "ยังไม่มีข้อมูล" : time.format(new Date(date));
-const formatMoney = (minor: number | null) => minor === null ? "ยังไม่มีข้อมูล" : formatValue(minor / 100, "currency");
 const SECTION = "min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5";
+const ROW_COLUMNS = "lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1.6fr)_auto]";
+const EAGER_PERFORMANCE_LIMIT = 8;
 const METRICS = {
   spendMinor: { label: "ยอดใช้จ่าย", format: "currency", unit: "บาท" },
   gmvMinor: { label: "GMV", format: "currency", unit: "บาท" },
@@ -51,44 +52,28 @@ function Stats({ clients, now }: { clients: AutomationClient[]; now: number }) {
 }
 
 export function AccessStatus({ client, now }: { client: AutomationClient; now: number }) {
-  if (client.access !== "verified") return <Badge variant="outline">ยังยืนยันการเข้าถึงไม่ได้</Badge>;
+  if (client.access !== "verified") {
+    const label = client.accessReason === "needs-authorization" ? "รออนุญาตบัญชี"
+      : client.accessReason === "identity-unverified" ? "รอยืนยันตัวตน Creator"
+        : client.accessReason === "upstream-unavailable" ? "ข้อมูลจาก TikTok ยังไม่พร้อม" : "ยังยืนยันการเข้าถึงไม่ได้";
+    return <Badge variant="outline" className="whitespace-normal">{label}</Badge>;
+  }
   if (!isFreshAutomationClient(client, now)) return <Badge variant="warning">ข้อมูลเก่า</Badge>;
   return <Badge variant="success">อ่านข้อมูลได้</Badge>;
 }
 
-function AccessInventory({ clients, now }: { clients: AutomationClient[]; now: number }) {
+function CreatorDetails({ client, campaign }: { client: AutomationClient; campaign: AutomationCampaign | null }) {
   return (
-    <section className={SECTION} aria-labelledby="automation-access">
-      <div className="mb-4 flex items-start gap-2.5">
-        <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
-        <div>
-          <h2 id="automation-access" className="text-base font-semibold">Access · บัญชีที่ระบบเข้าถึง</h2>
-          <p className="mt-1 text-sm text-muted-foreground">รายการนี้ไม่ใช่บัญชีทั้งหมดของ Agency และไม่แสดงบัญชีที่ยังไม่ได้ตั้งค่า</p>
-        </div>
+    <dl className="grid min-w-0 gap-2 rounded-lg border border-border bg-card p-3 text-xs sm:grid-cols-2">
+      <div><dt className="text-muted-foreground">Ad Account ID</dt><dd className="mt-1 break-all font-mono">{client.advertiserId}</dd></div>
+      <div>
+        <dt className="text-muted-foreground">TikTok Account ID{client.tiktokAccountIdVerified === false ? " (ตามที่แจ้ง)" : ""}</dt>
+        <dd className="mt-1 break-all font-mono">{client.tiktokAccountId}</dd>
+        {client.tiktokAccountIdVerified === false && <dd className="mt-1 text-muted-foreground">API ยังไม่ได้ยืนยันเลขนี้โดยตรง</dd>}
       </div>
-      {clients.length === 0 ? (
-        <p className="rounded-md bg-muted px-3 py-3 text-sm">ยังไม่มีบัญชี Creator ที่ตั้งค่าให้ดูใน Automation</p>
-      ) : (
-        <ul className="divide-y divide-border rounded-lg border border-border">
-          {clients.map((client) => (
-            <li key={client.clientId} className="grid min-w-0 gap-2 p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto] md:items-center md:gap-4">
-              <div className="min-w-0">
-                <p className="break-words text-sm font-semibold">{client.displayName}</p>
-                <p className="text-xs text-muted-foreground">Creator · LIVE GMV Max</p>
-              </div>
-              <dl className="grid min-w-0 gap-1 text-xs">
-                <div className="flex flex-wrap gap-x-2"><dt className="text-muted-foreground">Ad Account ID</dt><dd className="font-mono break-all">{client.advertiserId}</dd></div>
-                <div className="flex flex-wrap gap-x-2"><dt className="text-muted-foreground">TikTok Account ID</dt><dd className="font-mono break-all">{client.tiktokAccountId}</dd></div>
-              </dl>
-              <div className="flex flex-wrap items-center gap-2 md:items-end md:flex-col">
-                <AccessStatus client={client} now={now} />
-                <span className="text-xs text-muted-foreground">{formatTime(client.observedAt)}</span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+      {campaign && <div><dt className="text-muted-foreground">Campaign ID</dt><dd className="mt-1 break-all font-mono">{campaign.campaignId}</dd></div>}
+      <div><dt className="text-muted-foreground">อ่านสถานะล่าสุด · เวลาไทย</dt><dd className="mt-1">{formatTime(client.observedAt)}</dd></div>
+    </dl>
   );
 }
 
@@ -151,68 +136,13 @@ export function BudgetMeter({ campaign }: { campaign: AutomationCampaign }) {
   );
 }
 
-function CampaignCards({ clients, selectedId, onSelect }: {
-  clients: AutomationClient[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
+function PerformancePanel({ client, result, payload }: {
+  client: AutomationClient;
+  result: UseQueryResult<AutomationPerformance, Error>;
+  payload: AutomationPerformance | null;
 }) {
-  return (
-    <section className={SECTION} aria-labelledby="automation-enabled-campaigns">
-      <h2 id="automation-enabled-campaigns" className="text-base font-semibold">แคมเปญที่เปิดอยู่</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        แสดงแคมเปญที่ TikTok รายงานว่าเปิดใช้งาน ไม่ได้ยืนยันว่ากำลังส่งโฆษณาหรือไลฟ์อยู่
-      </p>
-      {clients.length === 0 ? (
-        <p className="mt-4 rounded-md bg-muted px-3 py-3 text-sm">ยังไม่มีแคมเปญเปิดอยู่ที่ยืนยันได้จากข้อมูลล่าสุด</p>
-      ) : (
-        <ul className="mt-4 grid gap-3 xl:grid-cols-2">
-          {clients.map((client) => {
-            const campaign = client.campaign;
-            if (!campaign) return null;
-            return (
-              <li key={client.clientId} className="min-w-0 rounded-lg border border-border p-4">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="break-words text-sm font-semibold">{campaign.campaignName}</p>
-                    <p className="break-all text-xs text-muted-foreground">{client.displayName} · {campaign.campaignId}</p>
-                  </div>
-                  <Badge variant="success">เปิดใช้งาน</Badge>
-                </div>
-                <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
-                  <div><dt className="text-xs text-muted-foreground">งบปัจจุบัน</dt><dd className="tabular font-medium">{formatMoney(campaign.dailyBudgetMinor)}</dd></div>
-                  <div><dt className="text-xs text-muted-foreground">ใช้แล้วโดยประมาณ</dt><dd className="tabular font-medium">{formatMoney(campaign.spendMinor)}</dd></div>
-                  <div><dt className="text-xs text-muted-foreground">ROI Target</dt><dd className="tabular font-medium">{campaign.targetRoi === null ? "ยังไม่มีข้อมูล" : `${number.format(campaign.targetRoi)} เท่า`}</dd></div>
-                </dl>
-                <BudgetMeter campaign={campaign} />
-                {clients.length > 1 && (
-                  <Button type="button" variant="outline" size="sm" className="mt-3" aria-pressed={selectedId === client.clientId} onClick={() => onSelect(client.clientId)}>
-                    ดู Performance
-                  </Button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      <ReadOnlyActions budgetPanel />
-    </section>
-  );
-}
-
-function PerformancePanel({ client, userId }: { client: AutomationClient; userId: number }) {
   const [metric, setMetric] = useState<AutomationMetric>("spendMinor");
-  const result = useQuery({
-    queryKey: ["automation", "performance", userId, client.clientId, client.campaign?.campaignId, client.reportingDate],
-    queryFn: ({ signal }) => fetchAutomationPerformance(signal),
-    enabled: client.campaign !== null,
-    gcTime: 0,
-    retry: false,
-    staleTime: 120_000,
-    refetchInterval: (query) => stopPolling(query.state.error) ? false : 180_000,
-  });
-  const payload = result.isSuccess && performanceMatchesClient(result.data, client) ? result.data : null;
-  const stale = payload !== null && isStalePerformance(payload);
-  const rows = payload?.state === "available" && !stale ? toHourlyChart(payload.series, metric) : [];
+  const rows = payload?.state === "available" ? toHourlyChart(payload.series, metric) : [];
   const metricInfo = METRICS[metric];
   const hasValues = rows.some(({ value }) => value !== null);
   return (
@@ -242,13 +172,11 @@ function PerformancePanel({ client, userId }: { client: AutomationClient; userId
         stopPolling(result.error) ? <EmptyState title="ยังเปิดกราฟสำหรับบัญชีนี้ไม่ได้" description="ไม่มีสิทธิ์หรือยังไม่ได้เปิดส่วนรายงาน Automation" /> :
           <ErrorState error={result.error} onRetry={() => void result.refetch()} />
       ) : !payload ? (
-        <EmptyState title="ยังไม่มีรายงานที่ตรงกับแคมเปญนี้" description="ระบบจะไม่แสดงตัวเลขของแคมเปญเดิมหรือวันอื่น" />
+        <EmptyState title="ยังไม่มีรายงานล่าสุดที่ยืนยันได้สำหรับแคมเปญนี้" description="ระบบจะไม่แสดงตัวเลขเก่า ของแคมเปญเดิม หรือของวันอื่น" />
       ) : payload.state === "no-active-campaign" ? (
         <EmptyState title="ไม่พบแคมเปญที่เปิดอยู่ในรายงานล่าสุด" />
       ) : payload.state === "unavailable" ? (
         <EmptyState title="TikTok ยังไม่ส่งรายงานที่ยืนยันได้" description="ไม่ได้หมายความว่า Performance เป็นศูนย์" />
-      ) : stale ? (
-        <EmptyState title="ข้อมูลรายชั่วโมงเก่าแล้ว" description="กดอัปเดตเพื่ออ่านรายงานล่าสุด ระบบไม่แสดงข้อมูลเก่าเป็นสถานะปัจจุบัน" />
       ) : !hasValues ? (
         <EmptyState title={`ยังไม่มีค่า ${metricInfo.label} รายชั่วโมงที่ยืนยันได้`} description="ช่องที่ไม่มีข้อมูลจะไม่แสดงเป็นศูนย์" />
       ) : (
@@ -287,9 +215,143 @@ function PerformancePanel({ client, userId }: { client: AutomationClient; userId
   );
 }
 
+function RowValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs leading-tight text-muted-foreground">{label}</dt>
+      <dd className="tabular mt-0.5 break-words text-sm font-medium">{value}</dd>
+    </div>
+  );
+}
+
+function CreatorRow({ client, userId, now, eager, expanded, onToggle, onRefreshCampaign }: {
+  client: AutomationClient;
+  userId: number;
+  now: number;
+  eager: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  onRefreshCampaign: () => void;
+}) {
+  const verified = isFreshAutomationClient(client, now);
+  const campaign = verified ? client.campaign : null;
+  const performanceEnabled = campaign !== null && (eager || expanded);
+  const query = useQuery({
+    queryKey: ["automation", "performance", userId, client.clientId, campaign?.campaignId, client.reportingDate],
+    queryFn: ({ signal }) => fetchAutomationPerformance(client.clientId, signal),
+    enabled: performanceEnabled,
+    gcTime: 0,
+    retry: false,
+    staleTime: 120_000,
+    refetchInterval: (state) => !performanceEnabled || stopPolling(state.state.error) ? false : 180_000,
+    refetchIntervalInBackground: false,
+  });
+  const payload = performanceEnabled && query.isSuccess ? creatorRowPerformance(query.data, client, now) : null;
+  const totals = payload?.state === "available" && payload.series.length > 0 ? summarizeCreatorPerformance(payload.series) : null;
+  const spendPercent = campaign && campaign.spendMinor !== null ? 100 * campaign.spendMinor / campaign.dailyBudgetMinor : null;
+  const canShowPilotControls = client.clientId === PILOT_BUDGET_CLIENT_ID && client.budgetControlAvailable !== false;
+  const detailId = `automation-creator-detail-${client.clientId}`;
+
+  return (
+    <li className="min-w-0 rounded-lg border border-border bg-card">
+      <div className={`grid min-w-0 items-start gap-x-4 gap-y-3 p-3 sm:p-4 md:grid-cols-2 lg:items-center ${ROW_COLUMNS}`}>
+        <div className="min-w-0">
+          <h3 className="break-words text-base font-semibold">{client.displayName}</h3>
+          <p className="mt-1 break-words text-xs text-muted-foreground">{campaign?.campaignName ?? "Creator · LIVE GMV Max"}</p>
+        </div>
+        <div className="flex min-w-0 flex-col items-start gap-1">
+          <AccessStatus client={client} now={now} />
+          <span className="text-xs text-muted-foreground">
+            {campaign ? "แคมเปญเปิดใช้งาน" : verified ? "ไม่พบแคมเปญที่เปิด" : "สถานะแคมเปญยังไม่ยืนยัน"}
+          </span>
+        </div>
+        <div className="min-w-0">
+          <p className="mb-1.5 text-xs font-medium lg:sr-only">งบและการใช้งบ</p>
+          <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2">
+            <RowValue label="งบปัจจุบัน" value={formatValue(campaign ? campaign.dailyBudgetMinor / 100 : null, "currency")} />
+            <RowValue label="ใช้ไป (ประมาณ)" value={formatValue(campaign?.spendMinor != null ? campaign.spendMinor / 100 : null, "currency")} />
+            <RowValue label="ใช้ไป (%)" value={spendPercent !== null ? `${number.format(spendPercent)}%` : "–"} />
+            <RowValue label="ROI Target" value={campaign?.targetRoi != null ? `${number.format(campaign.targetRoi)}×` : "–"} />
+          </dl>
+        </div>
+        <div className="min-w-0">
+          <p className="mb-1.5 text-xs font-medium lg:sr-only">Performance</p>
+          <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2">
+            <RowValue label="GMV" value={formatValue(totals?.gmvMinor != null ? totals.gmvMinor / 100 : null, "currency")} />
+            <RowValue label="ออเดอร์" value={formatValue(totals?.orders, "integer")} />
+            <RowValue label="ROI จริง" value={totals?.roi != null ? `${formatValue(totals.roi, "ratio")}×` : "–"} />
+            <RowValue label="LIVE Views" value={formatValue(totals?.liveViews, "integer")} />
+          </dl>
+          {campaign && !totals && <p className="mt-1.5 text-xs text-muted-foreground">
+            {!performanceEnabled ? "เปิดรายละเอียดเพื่อโหลด Performance" : query.isPending ? "กำลังอ่านรายงาน…" : "ยังไม่มีรายงานล่าสุดที่ยืนยันได้"}
+          </p>}
+        </div>
+        <Button type="button" variant="outline" size="sm" className="min-h-10 justify-self-start"
+          aria-controls={detailId} aria-expanded={expanded} aria-label={`รายละเอียด ${client.displayName}`} onClick={onToggle}>
+          รายละเอียด <ChevronDown className={`h-4 w-4 ${expanded ? "rotate-180" : ""}`} aria-hidden />
+        </Button>
+      </div>
+      <div id={detailId} hidden={!expanded} className="border-t border-border bg-muted/25 p-3 sm:p-4">
+        {expanded && <CreatorDetails client={client} campaign={campaign} />}
+        {canShowPilotControls && <div className="mt-3">
+          <ManualBudgetPanel key={userId} userId={userId} active={expanded} clients={[client]} onRefreshCampaign={onRefreshCampaign} />
+          {expanded && campaign && <BudgetMeter campaign={campaign} />}
+          {expanded && <ReadOnlyActions budgetPanel />}
+        </div>}
+        {expanded && campaign ? (
+          <div className="mt-3">
+            <PerformancePanel key={`${campaign.campaignId}:${client.reportingDate}`} client={client} result={query} payload={payload} />
+          </div>
+        ) : expanded && (
+          <p className="mt-3 text-sm text-muted-foreground">กราฟจะพร้อมเมื่อยืนยันการเข้าถึงและพบแคมเปญที่เปิดอยู่</p>
+        )}
+      </div>
+    </li>
+  );
+}
+
+export function CreatorRows({ clients, userId, now, onRefreshCampaign }: {
+  clients: AutomationClient[];
+  userId: number;
+  now: number;
+  onRefreshCampaign: () => void;
+}) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const eagerIds = new Set(clients.filter((client) => client.campaign !== null && isFreshAutomationClient(client, now))
+    .slice(0, EAGER_PERFORMANCE_LIMIT).map((client) => client.clientId));
+
+  return (
+    <section className={SECTION} aria-labelledby="automation-creators">
+      <h2 id="automation-creators" className="text-base font-semibold">Creator Performance</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        หนึ่งแถวต่อ Creator · เฉพาะบัญชีที่ตั้งค่าแล้ว · สถานะแคมเปญเปิดไม่ใช่หลักฐานว่ากำลังไลฟ์
+      </p>
+      {clients.length === 0 ? (
+        <p className="mt-4 rounded-md bg-muted px-3 py-3 text-sm">ยังไม่มีบัญชี Creator ที่ตั้งค่าให้ดูใน Automation</p>
+      ) : (
+        <>
+          <div className={`mt-4 hidden min-w-0 items-center gap-x-4 px-4 pb-2 text-xs font-medium text-muted-foreground lg:grid ${ROW_COLUMNS}`} aria-hidden>
+            <span>Creator / แคมเปญ</span><span>การเข้าถึง / สถานะ</span><span>งบและการใช้งบ</span><span>Performance</span><span className="w-[94px]" />
+          </div>
+          <ul className="mt-3 grid min-w-0 gap-2 lg:mt-0" aria-label="แถว Creator">
+            {clients.map((client) => (
+              <CreatorRow key={client.clientId} client={client} userId={userId} now={now}
+                eager={eagerIds.has(client.clientId)} expanded={expandedId === client.clientId}
+                onToggle={() => setExpandedId((current) => current === client.clientId ? null : client.clientId)}
+                onRefreshCampaign={onRefreshCampaign} />
+            ))}
+          </ul>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Performance รวมเฉพาะชั่วโมงที่ TikTok ส่งมา · ROI จริง = GMV ÷ ยอดใช้ของชั่วโมงชุดเดียวกัน · ขีดหมายถึงยังไม่มีข้อมูล ไม่ใช่ศูนย์
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function AutomationPage() {
   const userId = useAuthStore((state) => state.user?.id);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const overview = useQuery({
     queryKey: ["automation", "overview", userId],
     queryFn: ({ signal }) => fetchAutomationOverview(signal),
@@ -303,8 +365,6 @@ export function AutomationPage() {
   });
   const data = overview.isSuccess ? overview.data : null;
   const now = Date.now();
-  const enabled = data?.clients.filter((client) => isFreshAutomationClient(client, now) && client.campaign !== null) ?? [];
-  const selected = enabled.find((client) => client.clientId === selectedId) ?? enabled[0] ?? null;
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-muted/35">
@@ -335,15 +395,7 @@ export function AutomationPage() {
               <Clock3 className="h-4 w-4" aria-hidden /> ตรวจข้อมูลล่าสุด {formatTime(data.checkedAt)} (เวลาไทย) · อัปเดตประมาณทุก 1 นาที
             </p>
             <Stats clients={data.clients} now={now} />
-            <AccessInventory clients={data.clients} now={now} />
-            <CampaignCards clients={enabled} selectedId={selected?.clientId ?? null} onSelect={setSelectedId} />
-            {userId !== undefined && <ManualBudgetPanel key={userId} userId={userId} clients={data.clients} onRefreshCampaign={() => void overview.refetch()} />}
-            {selected && userId !== undefined ? <PerformancePanel key={`${selected.clientId}:${selected.campaign?.campaignId}:${selected.reportingDate}`} client={selected} userId={userId} /> : (
-              <section className={SECTION} aria-labelledby="automation-performance">
-                <h2 id="automation-performance" className="text-base font-semibold">Performance รายชั่วโมง</h2>
-                <p className="mt-1 text-sm text-muted-foreground">กราฟจะแสดงเมื่อยืนยันแคมเปญที่เปิดอยู่และได้รับรายงานจาก TikTok</p>
-              </section>
-            )}
+            {userId !== undefined && <CreatorRows key={userId} clients={data.clients} userId={userId} now={now} onRefreshCampaign={() => void overview.refetch()} />}
           </>
         ) : null}
       </div>
