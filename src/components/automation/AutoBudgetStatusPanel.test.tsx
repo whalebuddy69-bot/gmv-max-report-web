@@ -1,9 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
-import { budgetAutoStatusSchema, fetchBudgetAutoStatus, SRIHIW_CAP_CLIENT_ID, type BudgetAutoStatus } from "@/api/automationBudget";
+import { armBudgetAuto, ASHOP_CAP_CLIENT_ID, budgetAutoStatusSchema, fetchBudgetAutoStatus, NNSHOP_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, stopBudgetAuto, type BudgetAutoStatus } from "@/api/automationBudget";
 import { http } from "@/api/client";
-import { AutoBudgetStatusBody } from "./AutoBudgetStatusPanel";
+import { AutoBudgetControls, AutoBudgetStatusBody, getAutoArmPreview } from "./AutoBudgetStatusPanel";
 
 const observedAt = "2026-03-06T01:00:00.000Z";
 const now = Date.parse(observedAt) + 2_000;
@@ -18,6 +18,9 @@ const status = {
   },
   blockers: ["NATIVE_AUTO_UNVERIFIED", "SPEND_WATERMARK_MISSING", "LIVE_DELIVERY_UNVERIFIED"],
 } satisfies BudgetAutoStatus;
+const sampleNumericCampaign = "1234567890123456";
+const grantId = "5dc44ae6-cb1b-41a7-93bc-07805915653a";
+const expiresAt = "2026-03-06T01:30:00.000Z";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -64,5 +67,51 @@ describe("read-only Auto budget panel", () => {
       "/automation/budget/auto/status", "/automation/budget/srihiw/auto/status", "/automation/budget/srihiw/auto/status",
     ]);
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it("requires explicit live capability, no blockers, and the exact fresh campaign even below the threshold", () => {
+    const ready = { ...status, clientId: NNSHOP_CAP_CLIENT_ID, mode: "live", canArm: true, blockers: [],
+      preview: { ...status.preview, campaignId: sampleNumericCampaign, status: "BELOW_THRESHOLD", spendMinor: 200,
+        targetBudgetMinor: null, projectedClientSpendMinor: null },
+    } satisfies BudgetAutoStatus;
+    expect(getAutoArmPreview(ready, sampleNumericCampaign, now)).toEqual(ready.preview);
+    expect(getAutoArmPreview(ready, "1234567890123457", now)).toBeNull();
+    expect(getAutoArmPreview(ready, sampleNumericCampaign, now + 46_000)).toBeNull();
+    expect(getAutoArmPreview({ ...ready, canArm: undefined }, sampleNumericCampaign, now)).toBeNull();
+    expect(getAutoArmPreview({ ...ready, mode: "shadow" }, sampleNumericCampaign, now)).toBeNull();
+    expect(getAutoArmPreview({ ...ready, blockers: ["SPEND_WATERMARK_MISSING"] }, sampleNumericCampaign, now)).toBeNull();
+    expect(getAutoArmPreview({ ...ready, grant: { grantId, status: "ARMED", expiresAt } }, sampleNumericCampaign, now)).toBeNull();
+  });
+
+  it("renders no controls for unavailable permission, an unrelated Creator or an unauthorized stop", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const data = { ...status, mode: "live", blockers: [], preview: { ...status.preview, campaignId: sampleNumericCampaign } } satisfies BudgetAutoStatus;
+    const props = { campaignId: sampleNumericCampaign, clientId: PILOT_BUDGET_CLIENT_ID, dataUpdatedAt: now, refresh: async () => null } as const;
+    expect(renderToStaticMarkup(<AutoBudgetControls {...props} data={data} />)).toBe("");
+    expect(renderToStaticMarkup(<AutoBudgetControls {...props} data={{ ...data, canArm: true }} clientId={NNSHOP_CAP_CLIENT_ID} />)).toBe("");
+    const visible = renderToStaticMarkup(<AutoBudgetControls {...props} data={{ ...data, canArm: true }} />);
+    expect(visible).toContain("ตรวจเงื่อนไขก่อนเปิด Auto");
+    expect(visible).not.toContain("ยืนยันเปิด Auto ใช้เงินจริง");
+    const armed = { ...data, grant: { grantId, status: "ARMED", expiresAt } };
+    expect(renderToStaticMarkup(<AutoBudgetControls {...props} data={armed} />)).toBe("");
+    expect(renderToStaticMarkup(<AutoBudgetControls {...props} data={{ ...armed, canStop: true }} />)).toContain("หยุดรอบ Auto");
+  });
+
+  it.each([NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID] as const)("routes live commands to %s only and parses exact bodies", async (clientId) => {
+    const scope = { ...status, clientId, canArm: false };
+    const input = { expectedCampaignId: sampleNumericCampaign, expectedBudgetMinor: 40_000, expectedPolicyRevision: 2,
+      durationMinutes: 30, nativeAutoOff: true, noConcurrentChanges: true } as const;
+    const get = vi.spyOn(http, "get").mockResolvedValueOnce({ data: scope });
+    const post = vi.spyOn(http, "post").mockResolvedValueOnce({ data: { grantId, expiresAt } }).mockResolvedValueOnce({ data: { stopped: true } });
+    await expect(fetchBudgetAutoStatus(clientId)).resolves.toEqual(scope);
+    await expect(armBudgetAuto(clientId, input)).resolves.toEqual({ grantId, expiresAt });
+    await expect(stopBudgetAuto(clientId, grantId)).resolves.toEqual({ stopped: true });
+    await expect(armBudgetAuto(clientId, { ...input, durationMinutes: 121 })).rejects.toThrow();
+    await expect(stopBudgetAuto(clientId, "some-other-record")).rejects.toThrow();
+    expect(get.mock.calls.map(([path]) => path)).toEqual([`/automation/budget/${clientId}/auto/status`]);
+    expect(post.mock.calls).toEqual([
+      [`/automation/budget/${clientId}/auto/arm`, input],
+      [`/automation/budget/${clientId}/auto/stop`, { grantId }],
+    ]);
   });
 });

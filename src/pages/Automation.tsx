@@ -3,7 +3,7 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { Activity, ArrowDown, ArrowUp, ChevronDown, CirclePause, CirclePlay, Clock3, LockKeyhole, RefreshCw } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { fetchAutomationOverview, fetchAutomationPerformance, PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationCampaign, type AutomationPerformance } from "@/api/automation";
-import { SRIHIW_CAP_CLIENT_ID } from "@/api/automationBudget";
+import { isAdditionalBudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { AutoBudgetStatusPanel } from "@/components/automation/AutoBudgetStatusPanel";
 import { ManualBudgetPanel } from "@/components/automation/ManualBudgetPanel";
@@ -251,7 +251,7 @@ function CreatorRow({ client, userId, now, eager, expanded, onToggle, onRefreshC
   const payload = performanceEnabled && query.isSuccess ? creatorRowPerformance(query.data, client, now) : null;
   const totals = payload?.state === "available" && payload.series.length > 0 ? summarizeCreatorPerformance(payload.series) : null;
   const spendPercent = campaign && campaign.spendMinor !== null ? 100 * campaign.spendMinor / campaign.dailyBudgetMinor : null;
-  const budgetClientId = client.clientId === SRIHIW_CAP_CLIENT_ID ? SRIHIW_CAP_CLIENT_ID
+  const budgetClientId = isAdditionalBudgetCapClientId(client.clientId) ? client.clientId
     : client.clientId === PILOT_BUDGET_CLIENT_ID && client.budgetControlAvailable !== false ? PILOT_BUDGET_CLIENT_ID : null;
   const detailId = `automation-creator-detail-${client.clientId}`;
 

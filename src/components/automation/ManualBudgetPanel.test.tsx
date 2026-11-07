@@ -1,11 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
-import { budgetConfirmationSchema, budgetOperationSchema, budgetPreparationSchema, budgetStatusSchema, changeBudgetCap, confirmBudgetChange, fetchBudgetStatus, fetchSrihiwBudgetCapStatus, prepareBudgetChange, readBudgetOperation, SRIHIW_CAP_CLIENT_ID, type AutomationBudgetPreparation, type AutomationBudgetStatus } from "@/api/automationBudget";
+import { ASHOP_CAP_CLIENT_ID, budgetConfirmationSchema, budgetOperationSchema, budgetPreparationSchema, budgetStatusSchema, changeBudgetCap, confirmBudgetChange, fetchAdditionalBudgetCapStatus, fetchBudgetStatus, NNSHOP_CAP_CLIENT_ID, prepareBudgetChange, readBudgetOperation, SRIHIW_CAP_CLIENT_ID, type AutomationBudgetPreparation, type AutomationBudgetStatus, type BudgetCapClientId } from "@/api/automationBudget";
 import { http } from "@/api/client";
 import { budgetCapResultMatches, budgetResultMatches, canConfirmBudget, canConfirmBudgetCap, canEditBudgetCap, canPrepareBudget, freshBudgetCap, isTerminalBudgetResult, parseBudgetBaht, preparationMatchesRequest, validDirection } from "@/lib/automationBudget";
 import { BudgetCapEditor } from "./BudgetCapEditor";
-import { BudgetOutcome } from "./ManualBudgetPanel";
+import { BudgetOutcome, ManualBudgetPanel, operationStorageKey } from "./ManualBudgetPanel";
 
 const at = "2026-01-03T02:01:00.000Z";
 const now = Date.parse(at);
@@ -85,6 +86,22 @@ describe("manual budget UI guardrails", () => {
     expect(applied).toContain("฿1,500.75");
     expect(applied).toContain("ยืนยันจาก TikTok แล้ว");
   });
+
+  it("keeps operation recovery isolated and hides spend controls when a new Creator lacks permission", () => {
+    expect(new Set(([PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID] as const)
+      .map((scope) => operationStorageKey(17, scope))).size).toBe(4);
+    expect(operationStorageKey(17, NNSHOP_CAP_CLIENT_ID)).not.toBe(operationStorageKey(18, NNSHOP_CAP_CLIENT_ID));
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["automation", "budget-status", 17, NNSHOP_CAP_CLIENT_ID], {
+      ...status, clientId: NNSHOP_CAP_CLIENT_ID, mode: "live", canPrepare: false, capEditAllowed: false,
+    });
+    const html = renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <ManualBudgetPanel clientId={NNSHOP_CAP_CLIENT_ID} clients={[{ ...client, clientId: NNSHOP_CAP_CLIENT_ID, displayName: "NN Shop" }]} userId={17} onRefreshCampaign={() => {}} />
+    </QueryClientProvider>);
+    expect(html).toContain("NN Shop");
+    expect(html).not.toContain("เพิ่มงบ</button>");
+    expect(html).not.toContain("ลดงบ</button>");
+  });
 });
 
 describe("manual budget API contracts", () => {
@@ -130,6 +147,33 @@ describe("manual budget API contracts", () => {
       "/automation/budget/srihiw/status", `/automation/budget/srihiw/operations/${operationId}`, "/automation/budget/srihiw/status",
     ]);
   });
+
+  it.each([NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID] as const)("isolates all calls and first cap for %s", async (clientId) => {
+    const scoped = { ...status, clientId, mode: "live" as const };
+    const firstCap = { clientId, cap: null, capEditAllowed: true };
+    const capChange = { expectedRevision: 0, capMinor: 75_050 };
+    const get = vi.spyOn(http, "get").mockResolvedValueOnce({ data: scoped }).mockResolvedValueOnce({ data: firstCap })
+      .mockResolvedValueOnce({ data: simulated }).mockResolvedValueOnce({ data: status });
+    const post = vi.spyOn(http, "post").mockResolvedValueOnce({ data: { ...prepared, mode: "live" } })
+      .mockResolvedValueOnce({ data: simulated }).mockResolvedValueOnce({ data: { capMinor: 75_050, revision: 1 } });
+    await expect(fetchBudgetStatus(undefined, clientId)).resolves.toEqual(scoped);
+    await expect(fetchAdditionalBudgetCapStatus(clientId)).resolves.toEqual(firstCap);
+    await expect(prepareBudgetChange(prepareInput, clientId)).resolves.toMatchObject({ mode: "live" });
+    await expect(confirmBudgetChange(operationId, clientId)).resolves.toEqual(simulated);
+    await expect(readBudgetOperation(operationId, undefined, clientId)).resolves.toEqual(simulated);
+    await expect(changeBudgetCap(clientId, capChange)).resolves.toEqual({ capMinor: 75_050, revision: 1 });
+    await expect(fetchBudgetStatus(undefined, clientId)).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    await expect(prepareBudgetChange(prepareInput, "nnshop5719/../srihiw" as BudgetCapClientId)).rejects.toThrow();
+    expect(get.mock.calls.map(([path]) => path)).toEqual([
+      `/automation/budget/${clientId}/status`, `/automation/budget/cap/${clientId}`,
+      `/automation/budget/${clientId}/operations/${operationId}`, `/automation/budget/${clientId}/status`,
+    ]);
+    expect(post.mock.calls).toEqual([
+      [`/automation/budget/${clientId}/prepare`, prepareInput],
+      [`/automation/budget/${clientId}/confirm`, { operationId, nativeAutoOff: true, noConcurrentChanges: true }],
+      [`/automation/budget/cap/${clientId}`, capChange],
+    ]);
+  });
 });
 
 describe("website budget cap", () => {
@@ -148,12 +192,15 @@ describe("website budget cap", () => {
     expect(budgetStatusSchema.parse({ ...editable, capEditAllowed: undefined }).capEditAllowed).toBe(false);
   });
 
-  it("blocks stale or same-amount confirmation and only permits revision zero for first Srihiw cap", () => {
+  it("blocks stale or same-amount confirmation and permits revision zero only for a supported extra Creator's first cap", () => {
     expect(canConfirmBudgetCap(review, editable, PILOT_BUDGET_CLIENT_ID, now)).toBe(true);
     expect(canConfirmBudgetCap(review, { ...editable, cap: { ...singleCap, revision: 4 } }, PILOT_BUDGET_CLIENT_ID, now)).toBe(false);
     expect(canConfirmBudgetCap({ ...review, capMinor: review.currentCapMinor }, editable, PILOT_BUDGET_CLIENT_ID, now)).toBe(false);
     const first = { expectedRevision: 0, currentCapMinor: null, capMinor: 75_050 };
     expect(canConfirmBudgetCap(first, initialSrihiw, SRIHIW_CAP_CLIENT_ID, now)).toBe(true);
+    expect(canConfirmBudgetCap(first, { ...initialSrihiw, clientId: NNSHOP_CAP_CLIENT_ID }, NNSHOP_CAP_CLIENT_ID, now)).toBe(true);
+    expect(canConfirmBudgetCap(first, { ...initialSrihiw, clientId: ASHOP_CAP_CLIENT_ID }, ASHOP_CAP_CLIENT_ID, now)).toBe(true);
+    expect(canConfirmBudgetCap(first, { ...initialSrihiw, clientId: NNSHOP_CAP_CLIENT_ID }, ASHOP_CAP_CLIENT_ID, now)).toBe(false);
     expect(canConfirmBudgetCap(first, { ...initialSrihiw, cap: singleCap }, SRIHIW_CAP_CLIENT_ID, now)).toBe(false);
     expect(canConfirmBudgetCap(first, { ...editable, cap: null }, PILOT_BUDGET_CLIENT_ID, now)).toBe(false);
     expect(budgetCapResultMatches({ revision: 1, capMinor: first.capMinor }, first)).toBe(true);
@@ -178,12 +225,12 @@ describe("website budget cap", () => {
     const existing = { expectedRevision: 3, capMinor: 300_000 };
     const get = vi.spyOn(http, "get").mockResolvedValueOnce({ data: initialSrihiw }).mockResolvedValueOnce({ data: editable });
     const post = vi.spyOn(http, "post").mockResolvedValueOnce({ data: { capMinor: 300_000, revision: 4 } }).mockRejectedValueOnce(new Error("transport loss"));
-    await expect(fetchSrihiwBudgetCapStatus()).resolves.toEqual(initialSrihiw);
+    await expect(fetchAdditionalBudgetCapStatus(SRIHIW_CAP_CLIENT_ID)).resolves.toEqual(initialSrihiw);
     await expect(changeBudgetCap(PILOT_BUDGET_CLIENT_ID, existing)).resolves.toEqual({ capMinor: 300_000, revision: 4 });
     await expect(changeBudgetCap(SRIHIW_CAP_CLIENT_ID, first)).rejects.toThrow();
     await expect(changeBudgetCap(PILOT_BUDGET_CLIENT_ID, first)).rejects.toThrow();
     await expect(changeBudgetCap(SRIHIW_CAP_CLIENT_ID, { ...first, capMinor: -1 })).rejects.toThrow();
-    await expect(fetchSrihiwBudgetCapStatus()).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    await expect(fetchAdditionalBudgetCapStatus(SRIHIW_CAP_CLIENT_ID)).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
     expect(post.mock.calls).toEqual([
       ["/automation/budget/cap", existing], ["/automation/budget/cap/srihiw", first],
     ]);

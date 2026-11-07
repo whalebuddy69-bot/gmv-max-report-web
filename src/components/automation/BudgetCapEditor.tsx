@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Pencil, RefreshCw } from "lucide-react";
-import { changeBudgetCap, fetchSrihiwBudgetCapStatus, SRIHIW_CAP_CLIENT_ID, type BudgetCapClientId, type BudgetCapStatus } from "@/api/automationBudget";
+import { changeBudgetCap, fetchAdditionalBudgetCapStatus, isAdditionalBudgetCapClientId, type AdditionalBudgetCapClientId, type BudgetCapClientId, type BudgetCapStatus } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,7 +42,7 @@ export function BudgetCapEditor({
   const cap = known && freshBudgetCap(known, now) ? known.cap : null;
   const canEdit = active && !blocked && canEditBudgetCap(known, clientId, now);
   const canConfirm = canEdit && !!draft?.review && canConfirmBudgetCap(draft.review, known, clientId, now);
-  const unset = known && !known.cap && clientId === SRIHIW_CAP_CLIENT_ID;
+  const unset = known && !known.cap && isAdditionalBudgetCapClientId(clientId);
 
   useEffect(() => {
     if (!active) return;
@@ -153,14 +153,14 @@ export function BudgetCapEditor({
   );
 }
 
-export function SrihiwBudgetCapPanel({ active, userId, displayName, blocked, onEditingChange, refreshBudgetStatus }: {
-  active: boolean; userId: number; displayName: string; blocked: boolean; onEditingChange: (editing: boolean) => void;
+export function AdditionalBudgetCapPanel({ active, userId, clientId, displayName, blocked, onEditingChange, refreshBudgetStatus }: {
+  active: boolean; userId: number; clientId: AdditionalBudgetCapClientId; displayName: string; blocked: boolean; onEditingChange: (editing: boolean) => void;
   refreshBudgetStatus: () => Promise<unknown>;
 }) {
   const titleId = useId();
   const query = useQuery({
-    queryKey: ["automation", "cap-status", userId, SRIHIW_CAP_CLIENT_ID],
-    queryFn: ({ signal }) => fetchSrihiwBudgetCapStatus(signal),
+    queryKey: ["automation", "cap-status", userId, clientId],
+    queryFn: ({ signal }) => fetchAdditionalBudgetCapStatus(clientId, signal),
     enabled: active,
     gcTime: 0,
     retry: false,
@@ -180,7 +180,7 @@ export function SrihiwBudgetCapPanel({ active, userId, displayName, blocked, onE
           <RefreshCw className="h-4 w-4" aria-hidden />ตรวจเพดานล่าสุด
         </Button>
       </div>
-      <BudgetCapEditor active={active} clientId={SRIHIW_CAP_CLIENT_ID} displayName={displayName}
+      <BudgetCapEditor active={active} clientId={clientId} displayName={displayName}
         status={status} loading={query.isPending} refreshStatus={() => Promise.all([query.refetch(), refreshBudgetStatus()])}
         blocked={blocked} onEditingChange={onEditingChange} />
     </section>

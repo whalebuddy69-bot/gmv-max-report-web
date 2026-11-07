@@ -1,5 +1,5 @@
 import type { AutomationClient } from "@/api/automation";
-import { SRIHIW_CAP_CLIENT_ID, type AutomationBudgetOperation, type AutomationBudgetPreparation, type AutomationBudgetStatus, type BudgetCapClientId, type BudgetCapInput, type BudgetCapResult, type BudgetCapStatus, type BudgetPrepareInput } from "@/api/automationBudget";
+import { isAdditionalBudgetCapClientId, type AutomationBudgetOperation, type AutomationBudgetPreparation, type AutomationBudgetStatus, type BudgetCapClientId, type BudgetCapInput, type BudgetCapResult, type BudgetCapStatus, type BudgetPrepareInput } from "@/api/automationBudget";
 import { bangkokDay, isFreshAutomationClient } from "./automation";
 
 export type BudgetDirection = "increase" | "decrease";
@@ -34,7 +34,7 @@ export function freshBudgetCap(status: Pick<BudgetCapStatus, "cap"> | null, now:
 /** Policy editing is independent of permission to send real TikTok budget commands. */
 export function canEditBudgetCap(status: BudgetCapStatus | null, clientId: BudgetCapClientId, now: number): boolean {
   if (status?.clientId !== clientId || status.capEditAllowed !== true) return false;
-  if (!status.cap) return clientId === SRIHIW_CAP_CLIENT_ID;
+  if (!status.cap) return isAdditionalBudgetCapClientId(clientId);
   return !status.cap.locked && status.cap.revision < Number.MAX_SAFE_INTEGER
     && status.cap.campaignCapMinor === status.cap.clientDailyCapMinor && freshBudgetCap(status, now);
 }

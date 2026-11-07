@@ -2,14 +2,14 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, LockKeyhole, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
-import { confirmBudgetChange, fetchBudgetStatus, prepareBudgetChange, readBudgetOperation, SRIHIW_CAP_CLIENT_ID, type AutomationBudgetOperation, type AutomationBudgetPreparation, type BudgetCapClientId } from "@/api/automationBudget";
+import { confirmBudgetChange, fetchBudgetStatus, isAdditionalBudgetCapClientId, prepareBudgetChange, readBudgetOperation, type AutomationBudgetOperation, type AutomationBudgetPreparation, type BudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BANGKOK } from "@/lib/automation";
 import { budgetResultMatches, canConfirmBudget, canPrepareBudget, formatBudgetBaht as money, freshBudgetCap, isTerminalBudgetResult, parseBudgetBaht, preparationMatchesRequest, validDirection, type BudgetDirection } from "@/lib/automationBudget";
-import { BudgetCapEditor, SrihiwBudgetCapPanel } from "./BudgetCapEditor";
+import { AdditionalBudgetCapPanel, BudgetCapEditor } from "./BudgetCapEditor";
 
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, timeStyle: "medium" });
 const formatTime = (value: string) => time.format(new Date(value));
@@ -17,7 +17,7 @@ const STORAGE_PREFIX = "gmv-max-automation-budget-operation-v1:";
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const CAP_QUERY_KEY = "budget-status";
 
-function operationStorageKey(userId: number, clientId: BudgetCapClientId): string {
+export function operationStorageKey(userId: number, clientId: BudgetCapClientId): string {
   return `${STORAGE_PREFIX}${userId}${clientId === PILOT_BUDGET_CLIENT_ID ? "" : `:${clientId}`}`;
 }
 
@@ -130,7 +130,8 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
   });
   const status = query.isSuccess ? query.data : null;
   const client = clients.find((value) => value.clientId === clientId) ?? null;
-  const allowedMode = client?.budgetControlAvailable !== false && (status?.mode === "live" || (clientId === PILOT_BUDGET_CLIENT_ID && status?.mode === "dry-run"));
+  const allowedMode = !!client && client.budgetControlAvailable !== false && (status?.mode === "live" || (clientId === PILOT_BUDGET_CLIENT_ID && status?.mode === "dry-run"));
+  const mayPrepare = allowedMode && status?.canPrepare === true;
   const campaign = client?.campaign;
   const enabled = active && allowedMode && canPrepareBudget(status, client, now);
   const visibleMode = clientId === PILOT_BUDGET_CLIENT_ID && allowedMode ? status?.mode ?? "disabled" : enabled ? "live" : "disabled";
@@ -138,7 +139,7 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
   const readyToConfirm = active && allowedMode && !!review && canConfirmBudget(review, status, client, now);
   const terminal = result !== null && isTerminalBudgetResult(result.status);
   const actualMode = review?.mode === "live";
-  const displayName = client?.displayName ?? (clientId === SRIHIW_CAP_CLIENT_ID ? "srihiw" : "Ppan");
+  const displayName = client?.displayName ?? (clientId === PILOT_BUDGET_CLIENT_ID ? "Ppan" : clientId);
   const capEditorBlocked = !!operationId || !!review || pending !== null;
 
   useEffect(() => {
@@ -272,8 +273,8 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
       </div>
 
       <div className="mt-4">
-        {clientId === SRIHIW_CAP_CLIENT_ID ? (
-          <SrihiwBudgetCapPanel active={active} userId={userId} displayName={displayName} blocked={capEditorBlocked} onEditingChange={editCap} refreshBudgetStatus={query.refetch} />
+        {isAdditionalBudgetCapClientId(clientId) ? (
+          <AdditionalBudgetCapPanel active={active} userId={userId} clientId={clientId} displayName={displayName} blocked={capEditorBlocked} onEditingChange={editCap} refreshBudgetStatus={query.refetch} />
         ) : <BudgetCapEditor active={active} clientId={PILOT_BUDGET_CLIENT_ID} displayName={displayName}
           status={client ? status : null} loading={query.isPending} refreshStatus={query.refetch}
           blocked={capEditorBlocked} onEditingChange={editCap} />}
@@ -309,11 +310,13 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
         <div className="mt-4 space-y-3">
           {!enabled && <p className="flex items-start gap-2 text-xs text-muted-foreground"><LockKeyhole className="mt-px h-4 w-4 shrink-0" aria-hidden />{cap?.locked ? "มีรายการที่ยังต้องตรวจสอบ จึงยังไม่เปิดให้ปรับงบอีกครั้ง" : status?.mode === "disabled" ? "บัญชีนี้ยังไม่ได้เปิดสิทธิ์สั่งปรับงบ" : "ต้องยืนยันสิทธิ์ แคมเปญปัจจุบัน ยอดใช้ และเพดานล่าสุดก่อน"}</p>}
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" className="min-h-10" disabled={!enabled || pending !== null} aria-pressed={direction === "increase"} onClick={() => startDraft("increase")}><ArrowUp className="h-4 w-4" aria-hidden />เพิ่มงบ</Button>
-            <Button type="button" variant="outline" className="min-h-10" disabled={!enabled || pending !== null} aria-pressed={direction === "decrease"} onClick={() => startDraft("decrease")}><ArrowDown className="h-4 w-4" aria-hidden />ลดงบ</Button>
+            {mayPrepare && <>
+              <Button type="button" variant="outline" className="min-h-10" disabled={!enabled || pending !== null} aria-pressed={direction === "increase"} onClick={() => startDraft("increase")}><ArrowUp className="h-4 w-4" aria-hidden />เพิ่มงบ</Button>
+              <Button type="button" variant="outline" className="min-h-10" disabled={!enabled || pending !== null} aria-pressed={direction === "decrease"} onClick={() => startDraft("decrease")}><ArrowDown className="h-4 w-4" aria-hidden />ลดงบ</Button>
+            </>}
             <Button type="button" variant="ghost" className="min-h-10" disabled={query.isFetching || pending !== null || denied(query.error)} onClick={() => { void query.refetch(); onRefreshCampaign(); }}><RefreshCw className="h-4 w-4" aria-hidden />ตรวจสิทธิ์และเพดาน</Button>
           </div>
-          {direction && campaign && (
+          {mayPrepare && direction && campaign && (
             <form onSubmit={(event) => void prepare(event)} className="space-y-2 rounded-md border border-border p-3">
               <label htmlFor={inputId} className="block text-sm font-medium">งบใหม่เป็นบาท · ปัจจุบัน {money(campaign.dailyBudgetMinor)}</label>
               <Input id={inputId} type="text" inputMode="decimal" autoComplete="off" maxLength={25} value={amount} onChange={(event) => setAmount(event.target.value)} disabled={!enabled || pending !== null} />

@@ -7,6 +7,19 @@ const id = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
 const operationId = z.string().uuid();
 const positiveMinor = z.number().int().safe().positive();
 const commandMode = z.enum(["dry-run", "live"]);
+export const SRIHIW_CAP_CLIENT_ID = "srihiw";
+export const NNSHOP_CAP_CLIENT_ID = "nnshop5719";
+export const ASHOP_CAP_CLIENT_ID = "ashopbytheta";
+const extraBudgetIds = [SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID] as const;
+const budgetIds = [PILOT_BUDGET_CLIENT_ID, ...extraBudgetIds] as const;
+export type AdditionalBudgetCapClientId = typeof extraBudgetIds[number];
+export type BudgetCapClientId = typeof budgetIds[number];
+export function isAdditionalBudgetCapClientId(value: string): value is AdditionalBudgetCapClientId {
+  return extraBudgetIds.some((clientId) => clientId === value);
+}
+export function isBudgetCapClientId(value: string): value is BudgetCapClientId {
+  return value === PILOT_BUDGET_CLIENT_ID || isAdditionalBudgetCapClientId(value);
+}
 const capSchema = z.object({
   revision: z.number().int().safe().positive(),
   campaignCapMinor: positiveMinor,
@@ -16,7 +29,7 @@ const capSchema = z.object({
 });
 
 export const budgetStatusSchema = z.object({
-  clientId: id,
+  clientId: z.enum(budgetIds),
   mode: z.enum(["disabled", "dry-run", "live"]),
   cap: capSchema.nullable(),
   canPrepare: z.boolean(),
@@ -35,13 +48,11 @@ const budgetCapResultSchema = z.object({
   capMinor: positiveMinor,
 });
 
-export const SRIHIW_CAP_CLIENT_ID = "srihiw";
-const srihiwBudgetCapStatusSchema = z.object({
-  clientId: z.literal(SRIHIW_CAP_CLIENT_ID),
+const additionalBudgetCapStatusSchema = z.object({
+  clientId: z.enum(extraBudgetIds),
   cap: capSchema.nullable(),
   capEditAllowed: z.boolean().default(false),
 });
-const SRIHIW_CAP_PATH = "/automation/budget/cap/srihiw";
 
 const autoStatusCode = z.string().min(1).max(100);
 const autoPreviewSchema = z.object({
@@ -60,12 +71,25 @@ const autoPreviewSchema = z.object({
 "invalid Auto budget preview");
 
 export const budgetAutoStatusSchema = z.object({
-  clientId: z.enum([PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID]),
+  clientId: z.enum(budgetIds),
   mode: z.enum(["disabled", "shadow", "live"]),
-  grant: z.object({ grantId: id, status: autoStatusCode, expiresAt: instant }).nullable(),
+  grant: z.object({ grantId: operationId, status: autoStatusCode, expiresAt: instant }).nullable(),
   preview: autoPreviewSchema.nullable(),
   blockers: z.array(autoStatusCode).max(24),
+  canArm: z.boolean().optional(),
+  canStop: z.boolean().optional(),
 });
+
+const budgetAutoArmInputSchema = z.object({
+  expectedCampaignId: z.string().regex(/^[1-9]\d{5,30}$/),
+  expectedBudgetMinor: positiveMinor,
+  expectedPolicyRevision: positiveMinor,
+  durationMinutes: z.number().int().min(10).max(120),
+  nativeAutoOff: z.literal(true),
+  noConcurrentChanges: z.literal(true),
+}).strict();
+const budgetAutoArmResultSchema = z.object({ grantId: operationId, expiresAt: instant });
+const budgetAutoStopResultSchema = z.object({ stopped: z.boolean() });
 
 export const budgetPreparationSchema = z.object({
   operationId,
@@ -108,8 +132,8 @@ export type AutomationBudgetOperation = z.infer<typeof budgetOperationSchema>;
 export type BudgetCapInput = z.infer<typeof budgetCapInputSchema>;
 export type BudgetCapResult = z.infer<typeof budgetCapResultSchema>;
 export type BudgetCapStatus = Pick<AutomationBudgetStatus, "clientId" | "cap" | "capEditAllowed">;
-export type BudgetCapClientId = typeof PILOT_BUDGET_CLIENT_ID | typeof SRIHIW_CAP_CLIENT_ID;
 export type BudgetAutoStatus = z.infer<typeof budgetAutoStatusSchema>;
+export type BudgetAutoArmInput = z.infer<typeof budgetAutoArmInputSchema>;
 export type BudgetPrepareInput = {
   expectedCampaignId: string;
   expectedBudgetMinor: number;
@@ -118,8 +142,13 @@ export type BudgetPrepareInput = {
 
 function budgetPath(clientId: BudgetCapClientId): string {
   if (clientId === PILOT_BUDGET_CLIENT_ID) return "/automation/budget";
-  if (clientId === SRIHIW_CAP_CLIENT_ID) return "/automation/budget/srihiw";
+  if (isAdditionalBudgetCapClientId(clientId)) return `/automation/budget/${clientId}`;
   throw new Error("Invalid budget scope");
+}
+
+function capPath(clientId: AdditionalBudgetCapClientId): string {
+  if (isAdditionalBudgetCapClientId(clientId)) return `/automation/budget/cap/${clientId}`;
+  throw new Error("Invalid budget cap scope");
 }
 
 export function fetchBudgetStatus(signal?: AbortSignal, clientId: BudgetCapClientId = PILOT_BUDGET_CLIENT_ID) {
@@ -134,9 +163,22 @@ export function fetchBudgetAutoStatus(clientId: BudgetCapClientId, signal?: Abor
   );
 }
 
-export function fetchSrihiwBudgetCapStatus(signal?: AbortSignal) {
-  return request(srihiwBudgetCapStatusSchema, "Srihiw budget cap status", () =>
-    http.get(SRIHIW_CAP_PATH, { signal }),
+export function fetchAdditionalBudgetCapStatus(clientId: AdditionalBudgetCapClientId, signal?: AbortSignal) {
+  return request(additionalBudgetCapStatusSchema.refine((status) => status.clientId === clientId, "unexpected Creator scope"), "Creator budget cap status", () =>
+    http.get(capPath(clientId), { signal }),
+  );
+}
+
+/** The operator has to explicitly confirm the reviewed, account-scoped Auto window. */
+export function armBudgetAuto(clientId: BudgetCapClientId, input: BudgetAutoArmInput) {
+  return request(budgetAutoArmResultSchema, "Automation Auto arm", () =>
+    http.post(`${budgetPath(clientId)}/auto/arm`, budgetAutoArmInputSchema.parse(input)),
+  );
+}
+
+export function stopBudgetAuto(clientId: BudgetCapClientId, grantId: string) {
+  return request(budgetAutoStopResultSchema, "Automation Auto stop", () =>
+    http.post(`${budgetPath(clientId)}/auto/stop`, { grantId: operationId.parse(grantId) }),
   );
 }
 
@@ -144,7 +186,7 @@ export function fetchSrihiwBudgetCapStatus(signal?: AbortSignal) {
 export function changeBudgetCap(clientId: BudgetCapClientId, input: BudgetCapInput) {
   return request(budgetCapResultSchema, "Automation budget cap", () => {
     const body = budgetCapInputSchema.parse(input);
-    if (clientId === SRIHIW_CAP_CLIENT_ID) return http.post(SRIHIW_CAP_PATH, body);
+    if (isAdditionalBudgetCapClientId(clientId)) return http.post(capPath(clientId), body);
     if (clientId === PILOT_BUDGET_CLIENT_ID && body.expectedRevision > 0) return http.post("/automation/budget/cap", body);
     throw new Error("Invalid cap change scope");
   });
