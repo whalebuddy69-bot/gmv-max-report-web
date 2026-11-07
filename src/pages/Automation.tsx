@@ -5,6 +5,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { fetchAutomationOverview, fetchAutomationPerformance, PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationCampaign, type AutomationPerformance } from "@/api/automation";
 import { SRIHIW_CAP_CLIENT_ID } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
+import { AutoBudgetStatusPanel } from "@/components/automation/AutoBudgetStatusPanel";
 import { ManualBudgetPanel } from "@/components/automation/ManualBudgetPanel";
 import { EmptyState, ErrorState, LoadingState } from "@/components/shared/StateViews";
 import { Badge } from "@/components/ui/badge";
@@ -87,12 +88,12 @@ const ACTIONS = [
 ] as const;
 
 export function ReadOnlyActions({ budgetPanel = false }: { budgetPanel?: boolean } = {}) {
-  const actions = budgetPanel ? ACTIONS.filter(({ label }) => label !== "เพิ่มงบ" && label !== "ลดงบ") : ACTIONS;
+  const actions = budgetPanel ? ACTIONS.filter(({ label }) => label === "เปิด" || label === "ปิด/พัก") : ACTIONS;
   return (
     <div className="mt-4 border-t border-border pt-3">
       <p className="flex items-start gap-1.5 text-xs text-muted-foreground" id="automation-write-disabled">
         <LockKeyhole className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
-        {budgetPanel ? "เปิด/พักแคมเปญและ Auto ยังไม่เปิดให้ใช้งาน" : "รุ่นนี้อ่านข้อมูลเท่านั้น ปุ่มสั่งงานยังไม่เชื่อม TikTok"}
+        {budgetPanel ? "เปิด/พักแคมเปญยังไม่เปิดให้ใช้งาน" : "รุ่นนี้อ่านข้อมูลเท่านั้น ปุ่มสั่งงานยังไม่เชื่อม TikTok"}
       </p>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {actions.map(({ label, icon: Icon }) => (
@@ -297,6 +298,7 @@ function CreatorRow({ client, userId, now, eager, expanded, onToggle, onRefreshC
         {expanded && <CreatorDetails client={client} campaign={campaign} />}
         {budgetClientId && <div className="mt-3">
           <ManualBudgetPanel key={`${userId}:${budgetClientId}`} userId={userId} clientId={budgetClientId} active={expanded} clients={[client]} onRefreshCampaign={onRefreshCampaign} />
+          {expanded && verified && <AutoBudgetStatusPanel clientId={budgetClientId} userId={userId} campaignId={campaign?.campaignId ?? null} />}
           {expanded && campaign && budgetClientId === PILOT_BUDGET_CLIENT_ID && <BudgetMeter campaign={campaign} />}
           {expanded && <ReadOnlyActions budgetPanel />}
         </div>}

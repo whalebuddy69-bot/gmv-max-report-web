@@ -43,6 +43,30 @@ const srihiwBudgetCapStatusSchema = z.object({
 });
 const SRIHIW_CAP_PATH = "/automation/budget/cap/srihiw";
 
+const autoStatusCode = z.string().min(1).max(100);
+const autoPreviewSchema = z.object({
+  status: autoStatusCode,
+  campaignId: id,
+  currentBudgetMinor: positiveMinor,
+  spendMinor: z.number().int().safe().nonnegative(),
+  thresholdMinor: positiveMinor,
+  targetBudgetMinor: positiveMinor.nullable(),
+  projectedClientSpendMinor: positiveMinor.nullable(),
+  policyRevision: positiveMinor,
+  observedAt: instant,
+}).refine((value) => value.thresholdMinor <= value.currentBudgetMinor
+  && (value.targetBudgetMinor === null || value.targetBudgetMinor > value.currentBudgetMinor)
+  && (value.projectedClientSpendMinor === null || (value.targetBudgetMinor !== null && value.projectedClientSpendMinor >= value.targetBudgetMinor)),
+"invalid Auto budget preview");
+
+export const budgetAutoStatusSchema = z.object({
+  clientId: z.enum([PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID]),
+  mode: z.enum(["disabled", "shadow", "live"]),
+  grant: z.object({ grantId: id, status: autoStatusCode, expiresAt: instant }).nullable(),
+  preview: autoPreviewSchema.nullable(),
+  blockers: z.array(autoStatusCode).max(24),
+});
+
 export const budgetPreparationSchema = z.object({
   operationId,
   mode: commandMode,
@@ -85,6 +109,7 @@ export type BudgetCapInput = z.infer<typeof budgetCapInputSchema>;
 export type BudgetCapResult = z.infer<typeof budgetCapResultSchema>;
 export type BudgetCapStatus = Pick<AutomationBudgetStatus, "clientId" | "cap" | "capEditAllowed">;
 export type BudgetCapClientId = typeof PILOT_BUDGET_CLIENT_ID | typeof SRIHIW_CAP_CLIENT_ID;
+export type BudgetAutoStatus = z.infer<typeof budgetAutoStatusSchema>;
 export type BudgetPrepareInput = {
   expectedCampaignId: string;
   expectedBudgetMinor: number;
@@ -100,6 +125,12 @@ function budgetPath(clientId: BudgetCapClientId): string {
 export function fetchBudgetStatus(signal?: AbortSignal, clientId: BudgetCapClientId = PILOT_BUDGET_CLIENT_ID) {
   return request(budgetStatusSchema.refine((status) => status.clientId === clientId, "unexpected Creator scope"), "Automation budget status", () =>
     http.get(`${budgetPath(clientId)}/status`, { signal }),
+  );
+}
+
+export function fetchBudgetAutoStatus(clientId: BudgetCapClientId, signal?: AbortSignal) {
+  return request(budgetAutoStatusSchema.refine((value) => value.clientId === clientId, "unexpected Creator scope"), "Automation Auto status", () =>
+    http.get(`${budgetPath(clientId)}/auto/status`, { signal }),
   );
 }
 

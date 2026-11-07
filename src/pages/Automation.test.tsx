@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { automationOverviewSchema, automationPerformancePath, automationPerformanceSchema, type AutomationClient } from "@/api/automation";
+import { automationOverviewSchema, automationPerformancePath, automationPerformanceSchema, PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
 import { bangkokDay, creatorRowPerformance, isFreshAutomationClient, isStalePerformance, performanceMatchesClient, summarizeCreatorPerformance, toHourlyChart } from "@/lib/automation";
 import { AccessStatus, BudgetMeter, CreatorRows, ReadOnlyActions } from "./Automation";
 
@@ -122,6 +122,17 @@ describe("Automation frontend", () => {
     expect(html).toContain("รออนุญาตบัญชี");
     expect(html).not.toContain("กราฟยอดใช้จ่าย");
     expect(html).not.toContain("ปรับงบจากเว็บ");
+  });
+
+  it("keeps the Auto details out of collapsed supported Creator rows", () => {
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <CreatorRows clients={[{ ...client, clientId: PILOT_BUDGET_CLIENT_ID }, { ...client, clientId: "srihiw" }]} userId={17} now={now} onRefreshCampaign={() => {}} />
+      </QueryClientProvider>,
+    );
+    expect(html.match(/<li /g)).toHaveLength(2);
+    expect(html).not.toContain("เพิ่มงบอัตโนมัติ");
+    expect(html).not.toContain("กำลังตรวจสถานะ Auto");
   });
 
   it("orders provider labels, converts satang, and preserves real zero vs unknown gaps", () => {
