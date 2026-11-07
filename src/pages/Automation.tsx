@@ -4,6 +4,7 @@ import { Activity, ArrowDown, ArrowUp, CirclePause, CirclePlay, Clock3, LockKeyh
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { fetchAutomationOverview, fetchAutomationPerformance, type AutomationClient, type AutomationCampaign } from "@/api/automation";
 import { ApiError } from "@/api/client";
+import { ManualBudgetPanel } from "@/components/automation/ManualBudgetPanel";
 import { EmptyState, ErrorState, LoadingState } from "@/components/shared/StateViews";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -99,15 +100,16 @@ const ACTIONS = [
   { label: "Auto", icon: Activity },
 ] as const;
 
-export function ReadOnlyActions() {
+export function ReadOnlyActions({ budgetPanel = false }: { budgetPanel?: boolean } = {}) {
+  const actions = budgetPanel ? ACTIONS.filter(({ label }) => label !== "เพิ่มงบ" && label !== "ลดงบ") : ACTIONS;
   return (
     <div className="mt-4 border-t border-border pt-3">
       <p className="flex items-start gap-1.5 text-xs text-muted-foreground" id="automation-write-disabled">
         <LockKeyhole className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
-        รุ่นนี้อ่านข้อมูลเท่านั้น ปุ่มสั่งงานยังไม่เชื่อม TikTok
+        {budgetPanel ? "เปิด/พักแคมเปญและ Auto ยังไม่เปิดให้ใช้งาน" : "รุ่นนี้อ่านข้อมูลเท่านั้น ปุ่มสั่งงานยังไม่เชื่อม TikTok"}
       </p>
       <div className="mt-2 flex flex-wrap gap-1.5">
-        {ACTIONS.map(({ label, icon: Icon }) => (
+        {actions.map(({ label, icon: Icon }) => (
           <Button key={label} type="button" variant="outline" size="sm" disabled aria-describedby="automation-write-disabled">
             <Icon className="h-3.5 w-3.5" aria-hidden />
             {label}
@@ -176,11 +178,10 @@ function CampaignCards({ clients, selectedId, onSelect }: {
                   </div>
                   <Badge variant="success">เปิดใช้งาน</Badge>
                 </div>
-                <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
+                <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
                   <div><dt className="text-xs text-muted-foreground">งบปัจจุบัน</dt><dd className="tabular font-medium">{formatMoney(campaign.dailyBudgetMinor)}</dd></div>
                   <div><dt className="text-xs text-muted-foreground">ใช้แล้วโดยประมาณ</dt><dd className="tabular font-medium">{formatMoney(campaign.spendMinor)}</dd></div>
                   <div><dt className="text-xs text-muted-foreground">ROI Target</dt><dd className="tabular font-medium">{campaign.targetRoi === null ? "ยังไม่มีข้อมูล" : `${number.format(campaign.targetRoi)} เท่า`}</dd></div>
-                  <div><dt className="text-xs text-muted-foreground">เพดานรวมต่อวัน</dt><dd className="text-sm">ยังไม่เชื่อมกับ LINE</dd></div>
                 </dl>
                 <BudgetMeter campaign={campaign} />
                 {clients.length > 1 && (
@@ -193,7 +194,7 @@ function CampaignCards({ clients, selectedId, onSelect }: {
           })}
         </ul>
       )}
-      <ReadOnlyActions />
+      <ReadOnlyActions budgetPanel />
     </section>
   );
 }
@@ -312,7 +313,7 @@ export function AutomationPage() {
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-semibold tracking-tight">Automation</h1>
-              <Badge variant="secondary">ดูข้อมูลเท่านั้น</Badge>
+              <Badge variant="secondary">Creator · บัญชีนำร่อง</Badge>
             </div>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">ดูสิทธิ์เข้าถึง แคมเปญที่เปิด และผลโฆษณา Creator โดยไม่ต้องรอข้อความ LINE</p>
           </div>
@@ -336,6 +337,7 @@ export function AutomationPage() {
             <Stats clients={data.clients} now={now} />
             <AccessInventory clients={data.clients} now={now} />
             <CampaignCards clients={enabled} selectedId={selected?.clientId ?? null} onSelect={setSelectedId} />
+            {userId !== undefined && <ManualBudgetPanel key={userId} userId={userId} clients={data.clients} onRefreshCampaign={() => void overview.refetch()} />}
             {selected && userId !== undefined ? <PerformancePanel key={`${selected.clientId}:${selected.campaign?.campaignId}:${selected.reportingDate}`} client={selected} userId={userId} /> : (
               <section className={SECTION} aria-labelledby="automation-performance">
                 <h2 id="automation-performance" className="text-base font-semibold">Performance รายชั่วโมง</h2>
