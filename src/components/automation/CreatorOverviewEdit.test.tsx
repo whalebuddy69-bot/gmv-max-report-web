@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationOverview } from "@/api/automation";
 import { MAX_OBSERVATION_AGE_MS } from "@/lib/automation";
 import { invalidateOtherAutoBudgetViews } from "./AutoBudgetStatusPanel";
-import { CreatorCampaignSchedule, CreatorEditBudgetMeter, CreatorEditFormFields, CreatorOverviewEdit, creatorEditControlScope, getCreatorEditSync, isCreatorEditSyncCurrent } from "./CreatorOverviewEdit";
+import { CreatorCampaignEditPanel, CreatorCampaignSchedule, CreatorEditBudgetMeter, creatorEditControlScope, findEditableCreatorCampaign, getCreatorEditSync, isCreatorEditSyncCurrent } from "./CreatorOverviewEdit";
 
 const readAt = "2026-11-08T04:00:00.000Z";
 const now = Date.parse(readAt) + 1_000;
@@ -23,6 +23,7 @@ const client: AutomationClient = {
 const overview = (...clients: AutomationClient[]): AutomationOverview => ({
   schemaVersion: 1, checkedAt: readAt, coverage: "configured-creators-only", clients,
 });
+const selected = { ...client.campaign!, operationStatus: "ENABLE" } as const;
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -72,28 +73,54 @@ describe("creator overview edit scope", () => {
     expect(creatorEditControlScope(offline, sync, now)).toMatchObject({ syncCurrent: false, budgetClientId: null, autoCampaignId: null, autoClientId: client.clientId });
   });
 
-  it("has no drawer content or action before a row is explicitly opened", () => {
-    const markup = renderToStaticMarkup(<CreatorOverviewEdit client={null} userId={1} now={now}
-      onClose={() => { throw new Error("unexpected close"); }} onRefreshCampaign={() => { throw new Error("unexpected refresh"); }}
-      onSync={async () => { throw new Error("unexpected sync"); }} />);
-    expect(markup).toBe("");
+  it("allows only the exact active campaign and does not edit ended or expired data", () => {
+    expect(findEditableCreatorCampaign(client, selected, now)).toEqual(client.campaign);
+    expect(findEditableCreatorCampaign(client, { ...selected, campaignId: "another" }, now)).toBeNull();
+    expect(findEditableCreatorCampaign(client, { ...selected, operationStatus: "DISABLE" }, now)).toBeNull();
+    expect(findEditableCreatorCampaign(client, { ...selected, operationStatus: "DELETE" }, now)).toBeNull();
+    expect(findEditableCreatorCampaign(client, { ...selected, scheduleEndAt: readAt }, now)).toBeNull();
+    expect(findEditableCreatorCampaign({ ...client, campaign: { ...client.campaign!, scheduleEndAt: readAt } }, selected, now)).toBeNull();
+    expect(findEditableCreatorCampaign(client, selected, now + MAX_OBSERVATION_AGE_MS)).toBeNull();
   });
 
-  it("renders account and the five single-page edit sections in order, with the proper units and no tabs", () => {
+  it("renders a compact exact edit with current reported ROI and the proper units, without a review ROI button", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const queryClient = new QueryClient();
     const html = renderToStaticMarkup(<QueryClientProvider client={queryClient}>
-      <CreatorEditFormFields client={client} userId={1} now={now} sync={null} onRefreshCampaign={() => {}} />
+      <CreatorCampaignEditPanel client={client} campaign={selected} actualRoi={7.3} userId={1} now={now} onBack={() => {}}
+        onRefreshCampaign={() => {}} onSync={async () => null} />
     </QueryClientProvider>);
-    const sections = ["ข้อมูลบัญชี", "LIVE ROI Target", "Daily budget", "Auto budget increase", "Daily Ceiling", "Schedule", "Campaign Name"];
+    const sections = ["ตั้งค่าแคมเปญ", "ROI จริงวันนี้", "LIVE ROI Target", "Daily budget", "Auto budget increase", "Daily Ceiling", "Schedule", "Campaign Name"];
     const positions = sections.map((section) => html.indexOf(section));
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
     expect(html).toContain("Daily budget (THB)");
     expect(html).toContain("Daily Ceiling (THB)");
     expect(html).toContain("×");
+    expect(html).toContain("7.30×");
+    expect(html).toContain("กลับไปรายการ");
     expect(html).not.toContain('role="tab');
+    expect(html).not.toContain("ตรวจ ROI");
     expect(html).toContain("Sync บัญชีนี้ก่อนแก้งบ");
+    queryClient.clear();
+  });
+
+  it("renders only historical settings on a closed selection while a different campaign is active", () => {
+    const queryClient = new QueryClient();
+    const html = renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <CreatorCampaignEditPanel client={client} campaign={{ campaignId: "closed-campaign", campaignName: "Old Session", operationStatus: "DISABLE", dailyBudgetMinor: 125_000, targetRoi: 4.5 }}
+        actualRoi={1.5} userId={1} now={now} onBack={() => {}} onRefreshCampaign={() => {}} onSync={async () => null} />
+    </QueryClientProvider>);
+    expect(html).toContain("closed-campaign");
+    expect(html).toContain("Old Session");
+    expect(html).toContain('value="1,250.00"');
+    expect(html).toContain('value="4.50"');
+    expect(html).toContain("1.50×");
+    expect(html).not.toContain("Synthetic Campaign");
+    expect(html).not.toContain("3,000.00");
+    expect(html).not.toContain("Sync แคมเปญนี้");
+    expect(html).not.toContain("Daily Ceiling");
+    expect(html).not.toContain("Auto budget increase");
     queryClient.clear();
   });
 

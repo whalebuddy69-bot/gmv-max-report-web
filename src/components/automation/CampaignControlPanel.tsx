@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CirclePause, CirclePlay, LockKeyhole, RefreshCw, Target } from "lucide-react";
-import { confirmCampaignControl, fetchCampaignControlStatus, isConfirmableCampaignPreview, previewCampaignControl, readCampaignOperation,
+import { confirmCampaignControl, fetchCampaignControlStatus, fetchScopedCampaignControlStatus, isConfirmableCampaignPreview, previewCampaignControl, readCampaignOperation,
   type CampaignActionPreview, type CampaignControlAction, type CampaignOperation } from "@/api/automationCampaign";
 import { ApiError } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +20,9 @@ const campaignOpKey = (userId: number) => `gmv-max-ppan-campaign-operation-v1:${
 const opaqueOperationId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 function loadPendingOperation(userId: number) {
   try { const id = sessionStorage.getItem(campaignOpKey(userId)); return id && opaqueOperationId.test(id) ? id : null; } catch { return null; }
+}
+export function hasPendingCampaignOperation(userId: number) {
+  return loadPendingOperation(userId) !== null;
 }
 function storePendingOperation(userId: number, operationId: string | null) {
   try {
@@ -40,15 +43,20 @@ export function parseCampaignRoiTenths(text: string): number | null {
 }
 
 /** Confirmation only for a live, explicitly reviewed Ppan operation. */
-export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCampaignId, onVerified, layout = "default", fallbackRoi = null }: {
+export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCampaignId, onVerified, layout = "default", fallbackRoi = null, selectedCampaignId, lifecycleAction }: {
   userId: number; actionsEnabled?: boolean; syncedCampaignId?: string | null; onVerified?: (action: CampaignControlAction) => void;
-  layout?: "default" | "roi-field"; fallbackRoi?: number | null;
+  layout?: "default" | "roi-field" | "lifecycle" | "recovery"; fallbackRoi?: number | null; selectedCampaignId?: string;
+  lifecycleAction?: "PAUSE" | "RESUME";
 }) {
   const heading = useId();
   const input = useId();
   const description = useId();
   const isRoiField = layout === "roi-field";
-  const canReadDetails = !isRoiField || (actionsEnabled && syncedCampaignId !== undefined);
+  const isLifecycle = layout === "lifecycle";
+  const isRecovery = layout === "recovery";
+  const isTargeted = isRoiField || isLifecycle;
+  const canReadDetails = !isRecovery && (isLifecycle ? actionsEnabled && selectedCampaignId !== undefined && lifecycleAction !== undefined
+    : !isRoiField || (actionsEnabled && selectedCampaignId !== undefined && syncedCampaignId === selectedCampaignId));
   const [action, setAction] = useState<CampaignControlAction | null>(null);
   const [target, setTarget] = useState("");
   const [roiDraft, setRoiDraft] = useState<{ campaignId: string; value: string } | null>(null);
@@ -62,25 +70,33 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const result = useQuery({
-    queryKey: ["automation", "campaign-control", userId],
-    queryFn: ({ signal }) => fetchCampaignControlStatus(signal),
+    queryKey: isRecovery ? ["automation", "campaign-control-recovery", userId]
+      : isTargeted ? ["automation", "campaign-control", userId, selectedCampaignId] : ["automation", "campaign-control", userId],
+    queryFn: ({ signal }) => isTargeted && selectedCampaignId !== undefined ? fetchScopedCampaignControlStatus(selectedCampaignId, signal) : fetchCampaignControlStatus(signal),
     enabled: canReadDetails,
     gcTime: 0, retry: false, staleTime: 0, refetchInterval: (query) => blockedRequest(query.state.error) ? false : 30_000,
   });
   const data = canReadDetails && result.isSuccess ? result.data : null;
   const campaign = data?.campaign ?? null;
-  const supports = (value: CampaignControlAction | null) => value === "SET_ROI" ? data?.capabilities.setRoi :
-    value === "PAUSE" ? data?.capabilities.pause : value === "RESUME" ? data?.capabilities.resume : false;
+  const effectiveMode = (value: CampaignControlAction) => {
+    const key = value === "SET_ROI" ? "setRoi" : value === "PAUSE" ? "pause" : "resume";
+    return data?.actionModes?.[key] ?? (isTargeted ? undefined : data?.mode);
+  };
+  const roiMode = effectiveMode("SET_ROI");
+  const supports = (value: CampaignControlAction | null) => !(isLifecycle && value !== lifecycleAction) && (value === "SET_ROI" ? data?.capabilities.setRoi :
+    value === "PAUSE" ? data?.capabilities.pause : value === "RESUME" ? data?.capabilities.resume : false);
   const available = supports(action);
-  const matchedSync = syncedCampaignId === undefined || (syncedCampaignId === null ? campaign?.operationStatus === "DISABLE" : campaign?.campaignId === syncedCampaignId);
+  const matchedSync = isLifecycle ? campaign?.campaignId === selectedCampaignId && lifecycleAction !== undefined &&
+    campaign?.operationStatus === (lifecycleAction === "PAUSE" ? "ENABLE" : "DISABLE")
+    : syncedCampaignId === undefined || (syncedCampaignId === null ? campaign?.operationStatus === "DISABLE" : campaign?.campaignId === syncedCampaignId);
   const canReview = actionsEnabled && matchedSync && !pendingId && !pending;
-  const exactActiveCampaign = campaign?.operationStatus === "ENABLE" && campaign.campaignId === syncedCampaignId ? campaign : null;
-  const canReviewRoiField = canReview && exactActiveCampaign !== null && supports("SET_ROI") === true;
+  const exactActiveCampaign = campaign?.operationStatus === "ENABLE" && campaign.campaignId === selectedCampaignId && campaign.campaignId === syncedCampaignId ? campaign : null;
+  const canReviewRoiField = canReview && exactActiveCampaign !== null && supports("SET_ROI") === true && (roiMode === "live" || roiMode === "dry-run");
   const exactRoiDraft = exactActiveCampaign && roiDraft?.campaignId === exactActiveCampaign.campaignId ? roiDraft.value : null;
   const existingRoiValue = exactActiveCampaign ? String(exactActiveCampaign.roiTargetTenths / 10)
     : fallbackRoi !== null && Number.isFinite(fallbackRoi) && fallbackRoi >= 0 ? String(fallbackRoi) : "";
   const requestedRoi = exactRoiDraft === null ? null : parseCampaignRoiTenths(exactRoiDraft);
-  const canConfirm = (value: CampaignActionPreview) => canReview && acknowledged && data?.mode === "live" && supports(value.action) &&
+  const canConfirm = (value: CampaignActionPreview) => canReview && acknowledged && effectiveMode(value.action) === "live" && supports(value.action) &&
     (!isRoiField || value.action !== "SET_ROI" || canReviewRoiField) &&
     isConfirmableCampaignPreview(value) && campaign?.campaignId === value.campaignId &&
     campaign.operationStatus === value.before.status && campaign.roiTargetTenths === value.before.roiTenths &&
@@ -101,6 +117,7 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
     event.preventDefault();
     const nextAction = forcedAction ?? action;
     if (!data || !campaign || !nextAction || !supports(nextAction) || !canReview || busy.current ||
+      (isLifecycle && effectiveMode(nextAction) !== "dry-run" && effectiveMode(nextAction) !== "live") ||
       (isRoiField && nextAction === "SET_ROI" && (!canReviewRoiField || preview?.action === "SET_ROI"))) return;
     const age = Date.now() - Date.parse(campaign.observedAt);
     if (age < -5_000 || age > 45_000) { setNotice("ข้อมูลหมดอายุ กรุณาอัปเดตสถานะแคมเปญก่อน"); return; }
@@ -112,6 +129,7 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
     try {
       const next = await previewCampaignControl({ campaignId: campaign.campaignId, action: nextAction, expectedStatus: campaign.operationStatus,
         expectedRoiTenths: campaign.roiTargetTenths, ...(requested !== null ? { targetRoiTenths: requested } : {}) });
+      if (next.mode !== effectiveMode(nextAction)) { setNotice("สิทธิ์เปลี่ยนระหว่างเตรียมรายการ กรุณาอัปเดตสถานะก่อน"); return; }
       setPreview(next); setAction(null);
     } catch (error) {
       setNotice(error instanceof ApiError && error.status === 409 ? "แคมเปญหรือสิทธิ์เปลี่ยนระหว่างตรวจ กรุณาอัปเดตสถานะก่อน"
@@ -121,10 +139,11 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
 
   function applyOutcome(value: CampaignOperation) {
     const terminal = value.status === "APPLIED_VERIFIED" || value.status === "NOT_SENT";
-    if (terminal) storePendingOperation(userId, null);
+    // A user who left while waiting should still be able to see the result from the list.
     if (!mounted.current) return;
     setOutcome(value);
     if (terminal) {
+      storePendingOperation(userId, null);
       setPendingId(null);
       if (value.status === "APPLIED_VERIFIED") {
         if (value.action === "SET_ROI") setRoiDraft(null);
@@ -183,7 +202,9 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
   </>;
   const activity = <>
     {notice && <p role="status" className="text-xs text-muted-foreground">{notice}</p>}
-    {outcome && <p role="status" className="text-sm font-medium">{outcomeText[outcome.status]}</p>}
+    {outcome && <p role="status" className="break-words text-sm font-medium">{outcomeText[outcome.status]}
+      {selectedCampaignId && outcome.campaignId !== selectedCampaignId && <span className="block break-all text-xs font-normal text-muted-foreground">ผลรายการเดิม · Campaign ID: {outcome.campaignId}</span>}
+    </p>}
     {pendingId && <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
       <span className="break-all">รายการ: {pendingId}</span>
       <Button type="button" variant="outline" size="sm" className="min-h-11" disabled={pending} onClick={() => void checkPending()}>ตรวจผลรายการเดิม</Button>
@@ -194,11 +215,41 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
     <RefreshCw className="h-3.5 w-3.5" aria-hidden /> อัปเดต
   </Button>;
 
+  if (isRecovery) return <section aria-labelledby={heading} className="min-w-0 space-y-2 rounded-lg border border-border bg-card p-3 sm:p-4">
+    <h3 id={heading} className="text-sm font-semibold">ผลคำสั่งแคมเปญเดิม</h3>
+    {pendingId || outcome || notice ? activity : <p className="text-xs text-muted-foreground">ไม่พบรายการค้างในเบราว์เซอร์นี้</p>}
+  </section>;
+
+  if (isLifecycle) {
+    const label = lifecycleAction === "PAUSE" ? "ปิดแคมเปญ" : "เปิดแคมเปญเดิม";
+    const mode = lifecycleAction && effectiveMode(lifecycleAction);
+    return <section aria-labelledby={heading} className="min-w-0 space-y-2 rounded-lg border border-border bg-card p-3 sm:p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 id={heading} className="text-sm font-semibold">{label}</h3>
+        {canReadDetails && !blockedRequest(result.error) && refresh}
+      </div>
+      {selectedCampaignId && <p className="break-all text-xs text-muted-foreground">Campaign ID: {selectedCampaignId}</p>}
+      {!canReadDetails ? <p className="text-xs text-muted-foreground">ยังไม่ยืนยันสิทธิ์ของแคมเปญนี้</p>
+        : result.isPending ? <p role="status" className="text-xs text-muted-foreground">กำลังอ่านสถานะแคมเปญนี้…</p>
+          : result.isError ? <p className="text-xs text-muted-foreground">ยังยืนยันสิทธิ์หรือสถานะล่าสุดไม่ได้</p>
+            : !matchedSync || !lifecycleAction || !supports(lifecycleAction) || (mode !== "live" && mode !== "dry-run") ? <p className="text-xs text-muted-foreground">
+              {data?.blocker ? reasons.get(data.blocker) ?? "ยังไม่ผ่านเงื่อนไขการเปลี่ยนสถานะ" : "สถานะเปลี่ยนหรือบัญชีนี้ยังไม่รองรับคำสั่งนี้"}
+            </p> : <>
+              {mode === "dry-run" && <p className="text-xs text-muted-foreground">ทดลองเท่านั้น · ยังเปลี่ยนสถานะจริงไม่ได้</p>}
+              {!preview && !pendingId && <form onSubmit={(event) => void review(event, lifecycleAction)}>
+                <Button type="submit" variant="outline" size="sm" className="min-h-10" disabled={!canReview}>{pending ? "กำลังเตรียม…" : mode === "dry-run" ? "ดูตัวอย่าง" : "เตรียมรายการยืนยัน"}</Button>
+              </form>}
+              {preview && reviewResult}
+            </>}
+      {activity}
+    </section>;
+  }
+
   if (isRoiField) return <section aria-labelledby={heading} className="min-w-0 space-y-2.5 rounded-lg border border-border bg-card p-3.5 sm:p-4">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 id={heading} className="text-base font-semibold"><label htmlFor={input}>LIVE ROI Target</label></h3>
       <div className="flex items-center gap-2">
-        {data?.mode === "dry-run" && <Badge variant="outline">ตรวจเงื่อนไขเท่านั้น</Badge>}
+        {roiMode === "dry-run" && <Badge variant="outline">โหมดทดลอง · ไม่บันทึกจริง</Badge>}
         {canReadDetails && !blockedRequest(result.error) && refresh}
       </div>
     </div>
@@ -210,8 +261,8 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
           onChange={(event) => changeRoiDraft(event.target.value)} />
         <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">×</span>
       </div>
-      {canReadDetails && <Button type="submit" variant="outline" size="sm" className="min-h-11 shrink-0"
-        disabled={!canReviewRoiField || requestedRoi === null || requestedRoi === exactActiveCampaign?.roiTargetTenths || preview?.action === "SET_ROI"}>{pending ? "กำลังตรวจ…" : "ตรวจ ROI"}</Button>}
+      {canReadDetails && exactRoiDraft !== null && exactRoiDraft !== existingRoiValue && <Button type="submit" variant="outline" size="sm" className="min-h-11 shrink-0"
+        disabled={!canReviewRoiField || requestedRoi === null || requestedRoi === exactActiveCampaign?.roiTargetTenths || preview?.action === "SET_ROI"}>{pending ? "กำลังเตรียม…" : roiMode === "dry-run" ? "ดูตัวอย่าง" : "บันทึก ROI Target"}</Button>}
     </form>
     <p id={description} className="text-xs text-muted-foreground">
       เป้าหมายยอดขายต่อค่าโฆษณา (เท่า) · {!canReadDetails ? "Sync ก่อนแก้ไข"
@@ -219,21 +270,12 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
           : result.isError ? "ยังยืนยันสิทธิ์หรือสถานะแคมเปญไม่ได้"
             : !matchedSync ? "แคมเปญที่อ่านได้ไม่ตรงกับรอบ Sync"
               : data?.blocker ? reasons.get(data.blocker) ?? "ยังยืนยันเงื่อนไขให้จัดการแคมเปญไม่ได้"
-                : !exactActiveCampaign || !data?.capabilities.setRoi ? "ยังแก้ไขไม่ได้สำหรับแคมเปญนี้"
+                : !exactActiveCampaign || !data?.capabilities.setRoi || (roiMode !== "live" && roiMode !== "dry-run") ? "ยังแก้ไขไม่ได้สำหรับแคมเปญนี้"
                   : exactRoiDraft !== null && requestedRoi === null ? "กรอก 0.1–999.9 โดยใช้ทศนิยมไม่เกิน 1 ตำแหน่ง"
-                    : data.mode === "dry-run" ? "ตรวจเงื่อนไขได้ แต่ยังไม่ส่งคำสั่งไป TikTok"
+                    : roiMode === "dry-run" ? "ดูตัวอย่างได้ แต่ยังไม่ส่งคำสั่งไป TikTok"
                       : "ตรวจรายละเอียดก่อนยืนยันทุกคำสั่ง"}
     </p>
     {preview?.action === "SET_ROI" && reviewResult}
-    {(data?.capabilities.pause || data?.capabilities.resume || (preview && preview.action !== "SET_ROI")) && <details className="rounded-md border border-border px-3 py-1">
-      <summary className="min-h-10 cursor-pointer py-2.5 text-sm font-medium">พักหรือเปิดแคมเปญเดิมอีกครั้ง</summary>
-      <div className="space-y-2 pb-2">
-        {campaign && <p className="break-words text-xs text-muted-foreground">{campaign.campaignName || "แคมเปญ Ppan"} · {displayStatus(campaign.operationStatus)}</p>}
-        <div className="flex flex-wrap gap-1.5">{lifecycleActions}</div>
-        {action && action !== "SET_ROI" && reviewForm}
-        {preview && preview.action !== "SET_ROI" && reviewResult}
-      </div>
-    </details>}
     {activity}
   </section>;
 

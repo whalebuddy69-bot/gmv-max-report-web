@@ -1,11 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { campaignControlStatusSchema, confirmCampaignControl, isConfirmableCampaignPreview, previewCampaignControl, readCampaignOperation } from "@/api/automationCampaign";
+import { campaignControlStatusSchema, confirmCampaignControl, fetchScopedCampaignControlStatus, isConfirmableCampaignPreview, previewCampaignControl, readCampaignOperation } from "@/api/automationCampaign";
 import { http } from "@/api/client";
-import { CampaignControlPanel, parseCampaignRoiTenths } from "./CampaignControlPanel";
+import { CampaignControlPanel, hasPendingCampaignOperation, parseCampaignRoiTenths } from "./CampaignControlPanel";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("Ppan campaign action review", () => {
   const campaignId = "1234567890123456";
@@ -13,15 +13,16 @@ describe("Ppan campaign action review", () => {
   const preview = { campaignId, action: "PAUSE", sent: false, mode: "dry-run",
     before: { status: "ENABLE", roiTenths: 60 }, after: { status: "DISABLE", roiTenths: 60 } } as const;
   const observedAt = new Date().toISOString();
-  const status = { clientId: "punpan_020", mode: "dry-run", blocker: null,
+  const status = { clientId: "punpan_020", mode: "live", blocker: null,
     campaign: { campaignId, campaignName: "sample", operationStatus: "ENABLE", roiTargetTenths: 62, observedAt },
-    capabilities: { setRoi: true, pause: true, resume: false, create: false } } as const;
+    capabilities: { setRoi: true, pause: true, resume: false, create: false },
+    actionModes: { setRoi: "dry-run", pause: "live", resume: "disabled" } } as const;
 
   function renderRoiField(actionsEnabled: boolean, syncedCampaignId?: string | null, supplied: unknown = status) {
     const client = new QueryClient();
-    client.setQueryData(["automation", "campaign-control", 7], campaignControlStatusSchema.parse(supplied));
+    client.setQueryData(["automation", "campaign-control", 7, campaignId], campaignControlStatusSchema.parse(supplied));
     const result = renderToStaticMarkup(<QueryClientProvider client={client}>
-      <CampaignControlPanel layout="roi-field" userId={7} fallbackRoi={5.8} actionsEnabled={actionsEnabled} syncedCampaignId={syncedCampaignId} />
+      <CampaignControlPanel layout="roi-field" userId={7} fallbackRoi={5.8} selectedCampaignId={campaignId} actionsEnabled={actionsEnabled} syncedCampaignId={syncedCampaignId} />
     </QueryClientProvider>);
     client.clear();
     return result;
@@ -41,17 +42,70 @@ describe("Ppan campaign action review", () => {
     const exact = renderRoiField(true, campaignId);
     expect(exact).not.toContain('readonly=""');
     expect(exact).toContain('value="6.2"');
-    expect(exact).toContain("ตรวจ ROI");
+    expect(exact).not.toContain("ตรวจ ROI");
+    expect(exact).not.toContain("บันทึก ROI Target");
+    expect(exact).toContain("โหมดทดลอง · ไม่บันทึกจริง");
     expect(exact).toContain("ยังไม่ส่งคำสั่งไป TikTok");
   });
 
-  it("can review resuming the matched paused campaign without making its ROI writable", () => {
+  it("does not offer lifecycle buttons or ROI editing on a paused selection inside the edit form", () => {
     const paused = renderRoiField(true, null, { ...status,
       campaign: { ...status.campaign, operationStatus: "DISABLE" },
       capabilities: { ...status.capabilities, pause: false, resume: true } });
     expect(paused).toContain('readonly=""');
-    expect(paused).toContain("เปิดแคมเปญเดิมอีกครั้ง");
+    expect(paused).not.toContain("เปิดแคมเปญเดิมอีกครั้ง");
     expect(paused).not.toContain('value="6.2"');
+  });
+
+  function renderLifecycle(supplied: unknown, lifecycleAction: "PAUSE" | "RESUME") {
+    const client = new QueryClient();
+    client.setQueryData(["automation", "campaign-control", 7, campaignId], campaignControlStatusSchema.parse(supplied));
+    const result = renderToStaticMarkup(<QueryClientProvider client={client}>
+      <CampaignControlPanel layout="lifecycle" userId={7} selectedCampaignId={campaignId} lifecycleAction={lifecycleAction} />
+    </QueryClientProvider>);
+    client.clear();
+    return result;
+  }
+
+  it("only offers a user-initiated review for the exact campaign and explicitly allowed action", () => {
+    const post = vi.spyOn(http, "post");
+    expect(renderLifecycle(status, "PAUSE")).toContain("เตรียมรายการยืนยัน");
+    expect(renderLifecycle(status, "PAUSE")).not.toContain("ยืนยันส่งคำสั่งจริง");
+    expect(renderLifecycle(status, "RESUME")).not.toContain("เตรียมรายการยืนยัน");
+    expect(renderLifecycle({ ...status, actionModes: undefined }, "PAUSE")).not.toContain("เตรียมรายการยืนยัน");
+    expect(renderLifecycle({ ...status, campaign: { ...status.campaign, campaignId: "2234567890123456" } }, "PAUSE")).not.toContain("เตรียมรายการยืนยัน");
+    const paused = { ...status, campaign: { ...status.campaign, operationStatus: "DISABLE" },
+      capabilities: { ...status.capabilities, setRoi: false, pause: false, resume: true },
+      actionModes: { setRoi: "disabled", pause: "disabled", resume: "dry-run" } };
+    expect(renderLifecycle(paused, "RESUME")).toContain("ดูตัวอย่าง");
+    expect(renderLifecycle(paused, "RESUME")).toContain("ยังเปลี่ยนสถานะจริงไม่ได้");
+    expect(renderLifecycle(paused, "RESUME")).not.toContain("ยืนยันเปิดแคมเปญจริง");
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("routes an exact campaign status GET without substituting a different returned campaign", async () => {
+    const get = vi.spyOn(http, "get").mockResolvedValueOnce({ data: status })
+      .mockResolvedValueOnce({ data: { ...status, campaign: { ...status.campaign, campaignId: "2234567890123456" } } });
+    await expect(fetchScopedCampaignControlStatus(campaignId)).resolves.toEqual(status);
+    await expect(fetchScopedCampaignControlStatus(campaignId)).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    expect(() => fetchScopedCampaignControlStatus("../../another")).toThrow();
+    expect(get.mock.calls.map(([url]) => url)).toEqual(Array.from({ length: 2 }, () => `/automation/campaign/status/${campaignId}`));
+  });
+
+  it("recovers only an opaque operation for the same operator without showing mutation controls", () => {
+    const operationId = "11111111-1111-4111-8111-111111111111";
+    vi.stubGlobal("sessionStorage", { getItem: (key: string) => key.endsWith(":7") ? operationId : null });
+    const client = new QueryClient();
+    const markup = renderToStaticMarkup(<QueryClientProvider client={client}>
+      <CampaignControlPanel layout="recovery" userId={7} />
+    </QueryClientProvider>);
+    expect(hasPendingCampaignOperation(7)).toBe(true);
+    expect(hasPendingCampaignOperation(8)).toBe(false);
+    expect(markup).toContain("ตรวจผลรายการเดิม");
+    expect(markup).toContain(operationId);
+    expect(markup).not.toContain("ยืนยันส่งคำสั่งจริง");
+    expect(markup).not.toContain("อัปเดต");
+    client.clear();
   });
 
   it("converts decimal ROI values without floating rounding or unexpected inputs", () => {

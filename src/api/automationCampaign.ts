@@ -7,6 +7,7 @@ const campaignId = z.string().regex(/^[1-9]\d{5,30}$/);
 const operationStatus = z.enum(["ENABLE", "DISABLE"]);
 const action = z.enum(["SET_ROI", "PAUSE", "RESUME"]);
 const mode = z.enum(["dry-run", "live"]);
+const actionMode = z.enum(["disabled", "dry-run", "live"]);
 const roiTenths = z.number().int().positive().safe();
 const instant = z.string().datetime({ offset: true });
 const operationId = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
@@ -16,6 +17,7 @@ export const campaignControlStatusSchema = z.object({
   mode: z.enum(["disabled", "dry-run", "live"]),
   campaign: z.object({ campaignId, campaignName: z.string().max(512), operationStatus, roiTargetTenths: roiTenths, observedAt: instant }).nullable(),
   capabilities: z.object({ setRoi: z.boolean(), pause: z.boolean(), resume: z.boolean(), create: z.literal(false) }),
+  actionModes: z.object({ setRoi: actionMode, pause: actionMode, resume: actionMode }).optional(),
   blocker: z.string().min(1).max(100).nullable(),
 }).refine(({ campaign, mode: activeMode, capabilities }) => !(capabilities.setRoi || capabilities.pause || capabilities.resume) ||
   (activeMode !== "disabled" && campaign !== null && (!capabilities.pause || campaign.operationStatus === "ENABLE") &&
@@ -54,6 +56,12 @@ export function isConfirmableCampaignPreview(review: CampaignActionPreview, now 
 
 export function fetchCampaignControlStatus(signal?: AbortSignal) {
   return request(campaignControlStatusSchema, "Campaign control status", () => http.get(`${root}/status`, { signal }));
+}
+
+export function fetchScopedCampaignControlStatus(value: string, signal?: AbortSignal) {
+  const exact = campaignId.parse(value);
+  return request(campaignControlStatusSchema.refine((result) => result.campaign === null || result.campaign.campaignId === exact,
+    "campaign status does not match the selected campaign"), "Selected campaign control status", () => http.get(`${root}/status/${exact}`, { signal }));
 }
 
 export function previewCampaignControl(input: CampaignReviewInput) {

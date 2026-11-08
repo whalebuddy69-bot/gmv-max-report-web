@@ -1,25 +1,26 @@
-import { useEffect, useRef, useState } from "react";
-import { CalendarDays, RefreshCw, UserRound } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, CalendarDays, RefreshCw } from "lucide-react";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationCampaign, type AutomationClient, type AutomationOverview } from "@/api/automation";
 import { isBudgetCapClientId, type BudgetCapClientId } from "@/api/automationBudget";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { BANGKOK, isFreshAutomationClient } from "@/lib/automation";
 import { formatValue } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { AutoBudgetStatusPanel } from "./AutoBudgetStatusPanel";
 import { AutoDiagnosticsPanel } from "./AutoDiagnosticsPanel";
 import { CampaignControlPanel } from "./CampaignControlPanel";
 import { ManualBudgetPanel } from "./ManualBudgetPanel";
 
-type EditProps = {
-  client: AutomationClient | null;
-  userId: number;
-  now: number;
-  onClose: () => void;
-  onRefreshCampaign: () => void;
-  onSync: () => Promise<AutomationOverview | null>;
+export type CreatorEditCampaign = {
+  campaignId: string;
+  campaignName: string;
+  operationStatus: "ENABLE" | "DISABLE" | "DELETE";
+  targetRoi?: number | null;
+  dailyBudgetMinor?: number | null;
+  scheduleStartAt?: string | null;
+  scheduleEndAt?: string | null;
 };
 
 type CreatorBinding = Pick<AutomationClient, "clientId" | "advertiserId" | "tiktokAccountId">;
@@ -27,9 +28,8 @@ type CreatorEditSync = CreatorBinding & Pick<AutomationClient, "reportingDate" |
   campaignId: string | null;
 };
 
-const readTime = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const percentFormatter = new Intl.NumberFormat("th-TH", { maximumFractionDigits: 2 });
-const formSection = "min-w-0 space-y-3 rounded-lg border border-border bg-card p-3.5 sm:p-4";
+const formSection = "min-w-0 space-y-2 rounded-lg border border-border bg-card p-3 sm:p-4";
 const scheduleTime = new Intl.DateTimeFormat("en-GB", { timeZone: BANGKOK, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
 function sameBinding(a: CreatorBinding, b: CreatorBinding) {
@@ -69,6 +69,28 @@ export function creatorEditControlScope(client: AutomationClient, sync: CreatorE
   };
 }
 
+/** The list selects a specific row. Never substitute a different active campaign when opening it. */
+export function findEditableCreatorCampaign(client: AutomationClient, selected: CreatorEditCampaign, now: number) {
+  return selected.operationStatus === "ENABLE" && notPastScheduleEnd(selected.scheduleEndAt, now) && isFreshAutomationClient(client, now)
+    && client.campaign?.campaignId === selected.campaignId && notPastScheduleEnd(client.campaign.scheduleEndAt, now)
+    ? client.campaign : null;
+}
+
+function notPastScheduleEnd(value: string | null | undefined, now: number) {
+  return value == null || Date.parse(value) > now;
+}
+
+export function CreatorCampaignFormSection({ title, tag, className, children }: { title: string; tag?: string; className?: string; children: ReactNode }) {
+  const heading = useId();
+  return <section aria-labelledby={heading} className={cn(formSection, className)}>
+    <div className="flex flex-wrap items-center gap-2">
+      <h3 id={heading} className="text-sm font-semibold sm:text-base">{title}</h3>
+      {tag && <Badge variant="outline" className="font-normal">{tag}</Badge>}
+    </div>
+    {children}
+  </section>;
+}
+
 export function CreatorEditBudgetMeter({ campaign }: { campaign: AutomationCampaign }) {
   if (campaign.spendMinor === null) return <p className="text-xs text-muted-foreground">ยังยืนยันยอดใช้ของแคมเปญไม่ได้</p>;
   const percent = (campaign.spendMinor / campaign.dailyBudgetMinor) * 100;
@@ -84,34 +106,6 @@ export function CreatorEditBudgetMeter({ campaign }: { campaign: AutomationCampa
     </div>
     <p className="text-xs text-muted-foreground">เส้น 80% คือเกณฑ์ยอดใช้ ไม่ได้ยืนยันว่า Auto เพิ่มงบแล้ว</p>
   </div>;
-}
-
-function AccountInfo({ client, now }: { client: AutomationClient; now: number }) {
-  const fresh = isFreshAutomationClient(client, now);
-  const campaign = fresh ? client.campaign : null;
-  const status = client.access === "verified" ? fresh ? "อ่านข้อมูลได้" : "ข้อมูลเก่า"
-    : client.accessReason === "needs-authorization" ? "รออนุญาตบัญชี"
-      : client.accessReason === "identity-unverified" ? "รอยืนยันตัวตน Creator"
-        : client.accessReason === "upstream-unavailable" ? "ข้อมูลจาก TikTok ยังไม่พร้อม" : "ยังยืนยันการเข้าถึงไม่ได้";
-
-  return <section className={formSection} aria-label="ข้อมูลบัญชี">
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="flex items-center gap-2 text-base font-semibold"><UserRound className="size-4 text-muted-foreground" aria-hidden />ข้อมูลบัญชี</h3>
-      <Badge variant={fresh ? "success" : client.access === "verified" ? "warning" : "outline"}>{status}</Badge>
-    </div>
-    <dl className="grid min-w-0 gap-3 text-sm sm:grid-cols-2">
-      <div><dt className="text-muted-foreground">Ad Account ID</dt><dd className="break-all font-mono text-xs">{client.advertiserId}</dd></div>
-      <div>
-        <dt className="text-muted-foreground">TikTok Account ID</dt>
-        <dd className="break-all font-mono text-xs">{client.tiktokAccountId}</dd>
-        {client.tiktokAccountIdVerified === false && <dd className="text-xs text-muted-foreground">ตามที่แจ้ง · API ยังไม่ได้ยืนยันเลขนี้โดยตรง</dd>}
-      </div>
-      <div><dt className="text-muted-foreground">อ่านล่าสุด · เวลาไทย</dt><dd>{client.observedAt ? `${readTime.format(new Date(client.observedAt))} น.` : "—"}</dd></div>
-      <div><dt className="text-muted-foreground">วันที่รายงาน</dt><dd>{client.reportingDate ?? "—"}</dd></div>
-      {campaign && <div className="sm:col-span-2"><dt className="text-muted-foreground">Campaign ID</dt><dd className="break-all font-mono text-xs">{campaign.campaignId}</dd></div>}
-    </dl>
-    {!campaign && <p className="text-sm text-muted-foreground">{fresh ? "ไม่พบแคมเปญที่เปิดในข้อมูลล่าสุด" : "ยังไม่มีสถานะแคมเปญล่าสุดที่ยืนยันได้"}</p>}
-  </section>;
 }
 
 function ReadOnlyField({ label, value, unit }: { label: string; value: string | null; unit?: string }) {
@@ -130,15 +124,18 @@ function formatSchedule(value: string | null | undefined) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
-export function CreatorCampaignSchedule({ campaign }: { campaign: AutomationCampaign | null }) {
+export function CreatorCampaignSchedule({ campaign, embedded = false }: {
+  campaign: Pick<CreatorEditCampaign, "scheduleStartAt" | "scheduleEndAt" | "campaignName"> | null;
+  embedded?: boolean;
+}) {
   const start = formatSchedule(campaign?.scheduleStartAt);
   const end = start ? formatSchedule(campaign?.scheduleEndAt) : null;
   const continuous = start !== null && campaign?.scheduleEndAt === null;
-  return <section className={formSection} aria-label="Schedule">
-    <div className="flex flex-wrap items-center justify-between gap-2">
+  return <section className={embedded ? "space-y-2 px-3 pb-3 sm:px-4" : formSection} aria-label="Schedule">
+    {!embedded && <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 className="flex items-center gap-2 text-base font-semibold"><CalendarDays className="size-4 text-muted-foreground" aria-hidden />Schedule</h3>
       <Badge variant="outline">เวลาไทย (UTC+7) · อ่านอย่างเดียว</Badge>
-    </div>
+    </div>}
     <div className="grid gap-3 sm:grid-cols-2">
       <ReadOnlyField label="Start date" value={start} />
       <ReadOnlyField label="End date" value={end ?? (continuous ? "ไม่กำหนดวันสิ้นสุด" : null)} />
@@ -160,59 +157,42 @@ function CreatorAutoDiagnostics({ userId }: { userId: number }) {
   </details>;
 }
 
-export function CreatorEditFormFields({ client, userId, now, sync, onRefreshCampaign }: {
+type CreatorEditPanelProps = {
   client: AutomationClient;
+  campaign: CreatorEditCampaign;
+  actualRoi: number | null;
   userId: number;
   now: number;
-  sync: CreatorEditSync | null;
+  onBack: () => void;
   onRefreshCampaign: () => void;
+  onSync: () => Promise<AutomationOverview | null>;
+};
+
+function CreatorEditAutoSettings({ clientId, userId, campaignId, blockAutoStart }: {
+  clientId: BudgetCapClientId; userId: number; campaignId: string | null; blockAutoStart: boolean;
 }) {
-  const scope = creatorEditControlScope(client, sync, now);
-  const campaign = isFreshAutomationClient(client, now) ? client.campaign : null;
-  const autoClientId = scope.autoClientId;
-  function renderAuto(blockAutoStart: boolean) {
-    return autoClientId ? <AutoBudgetStatusPanel variant="campaign-form" blockAutoStart={blockAutoStart}
-      userId={userId} clientId={autoClientId} campaignId={scope.autoCampaignId} /> : <section className={formSection} aria-label="Auto budget increase">
-      <h3 className="text-base font-semibold">Auto budget increase</h3>
-      <p className="text-sm text-muted-foreground">บัญชีนี้ยังไม่รองรับ Auto Budget จากเว็บ</p>
-    </section>;
-  }
-  return <>
-    <AccountInfo client={client} now={now} />
-    {scope.campaignControl ? <CampaignControlPanel layout="roi-field" fallbackRoi={campaign?.targetRoi ?? null} userId={userId}
-      actionsEnabled={scope.syncCurrent} syncedCampaignId={sync?.campaignId} onVerified={onRefreshCampaign} /> : <section className={formSection} aria-label="LIVE ROI Target">
-      <ReadOnlyField label="LIVE ROI Target" unit="×" value={campaign?.targetRoi == null ? null : formatValue(campaign.targetRoi, "ratio")} />
-      <p className="text-xs text-muted-foreground">เป้าหมาย ROI เป็นจำนวนเท่า · บัญชีนี้ยังแก้จากเว็บไม่ได้</p>
-    </section>}
-    {scope.budgetClientId ? <ManualBudgetPanel variant="campaign-form" renderBetweenBudgetAndCeiling={renderAuto}
-      userId={userId} clientId={scope.budgetClientId} active={scope.syncCurrent} clients={[client]} onRefreshCampaign={onRefreshCampaign} /> : <>
-      <section className={formSection} aria-label="Daily budget">
-        <ReadOnlyField label="Daily budget" unit="THB" value={campaign ? formatValue(campaign.dailyBudgetMinor / 100, "decimal") : null} />
-        <p className="text-xs text-muted-foreground">บัญชีนี้ยังไม่เปิดสิทธิ์ปรับงบจากเว็บ</p>
-      </section>
-      {renderAuto(false)}
-      <section className={formSection} aria-label="Daily Ceiling">
-        <ReadOnlyField label="Daily Ceiling" unit="THB" value={null} />
-        <p className="text-xs text-muted-foreground">บัญชีนี้ยังไม่เปิดสิทธิ์ตั้งเพดานจากเว็บ</p>
-      </section>
-    </>}
-    <CreatorCampaignSchedule campaign={campaign} />
-    {campaign && <details className="rounded-md border border-border bg-card px-3 py-1">
-      <summary className="min-h-10 cursor-pointer py-2.5 text-sm font-medium">ดูสัดส่วนงบที่ใช้วันนี้</summary>
-      <div className="pb-2"><CreatorEditBudgetMeter campaign={campaign} /></div>
-    </details>}
-    {autoClientId === PILOT_BUDGET_CLIENT_ID && <CreatorAutoDiagnostics userId={userId} />}
-  </>;
+  const [open, setOpen] = useState(false);
+  return <details className="rounded-lg border border-border bg-card px-3 sm:px-4" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary className="min-h-10 cursor-pointer py-2.5 text-sm font-medium">Auto budget increase</summary>
+    {open && <div className="pb-3"><AutoBudgetStatusPanel variant="campaign-form" clientId={clientId} userId={userId}
+      campaignId={campaignId} blockAutoStart={blockAutoStart} /></div>}
+  </details>;
 }
 
-function EditBody({ client, userId, now, onRefreshCampaign, onSync }: Omit<EditProps, "onClose" | "client"> & { client: AutomationClient }) {
+function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onBack, onRefreshCampaign, onSync }: CreatorEditPanelProps) {
   const [sync, setSync] = useState<CreatorEditSync | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncFailed, setSyncFailed] = useState(false);
   const [clock, setClock] = useState<number | null>(null);
   const syncLock = useRef(false);
   const currentTime = Math.max(now, clock ?? now);
-  const scope = creatorEditControlScope(client, sync, currentTime);
+  const activeCampaign = findEditableCreatorCampaign(client, campaign, currentTime);
+  const exactSync = activeCampaign && sync?.campaignId === campaign.campaignId ? sync : null;
+  const scope = creatorEditControlScope(client, exactSync, currentTime);
+  const settings = activeCampaign ?? campaign;
+  const roiText = actualRoi !== null && Number.isFinite(actualRoi) && actualRoi >= 0 ? `${formatValue(actualRoi, "ratio")}×` : "—";
+  const maySync = campaign.operationStatus === "ENABLE" && notPastScheduleEnd(campaign.scheduleEndAt, currentTime);
+  const statusText = campaign.operationStatus === "ENABLE" ? maySync ? "เปิด" : "จบแล้ว" : campaign.operationStatus === "DISABLE" ? "ปิด" : "ลบแล้ว";
 
   useEffect(() => {
     if (!sync) return;
@@ -222,15 +202,16 @@ function EditBody({ client, userId, now, onRefreshCampaign, onSync }: Omit<EditP
   }, [sync]);
 
   async function syncSelected() {
-    if (syncLock.current) return;
+    if (syncLock.current || !maySync) return;
     syncLock.current = true;
     setSync(null);
     setSyncFailed(false);
     setSyncing(true);
     try {
       const latest = getCreatorEditSync(await onSync(), client, Date.now());
-      setSync(latest);
-      setSyncFailed(latest === null);
+      const matches = latest?.campaignId === campaign.campaignId;
+      setSync(matches ? latest : null);
+      setSyncFailed(!matches);
     } catch {
       setSyncFailed(true);
     } finally {
@@ -239,39 +220,60 @@ function EditBody({ client, userId, now, onRefreshCampaign, onSync }: Omit<EditP
     }
   }
 
-  return <div className="flex min-h-0 flex-col">
-    <header className="space-y-3 border-b border-border p-4 sm:p-5">
-      <div className="min-w-0 pr-12">
-        <DialogTitle className="break-words text-xl font-semibold tracking-tight">จัดการ {client.displayName}</DialogTitle>
-        <DialogDescription className="mt-1 text-sm text-muted-foreground">ตั้งค่า LIVE GMV Max ของบัญชีนี้ · LINE ใช้แจ้งผล</DialogDescription>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" className="min-h-11 shrink-0" disabled={syncing} onClick={() => void syncSelected()}>
-          <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} aria-hidden /> {syncing ? "กำลัง Sync…" : "Sync บัญชีนี้"}
-        </Button>
-        <p role="status" className="min-w-0 flex-1 basis-40 break-words text-xs text-muted-foreground">
-          {scope.syncCurrent ? "Sync สำเร็จ · ไม่ได้แก้ไขแคมเปญ" : syncing ? "กำลังอ่านข้อมูลล่าสุดจาก TikTok…" : syncFailed ? "ยังยืนยันข้อมูลบัญชีนี้ไม่ได้ กรุณาลองอีกครั้ง" : sync ? "ข้อมูลหมดอายุหรือแคมเปญเปลี่ยน กรุณา Sync ใหม่" : "Sync เพื่ออ่านข้อมูลก่อนสั่งงาน · ไม่เปิดแอดหรือเปลี่ยนงบ"}
-        </p>
-      </div>
-    </header>
-
-    <div className="min-h-0 space-y-3 overflow-y-auto overscroll-contain bg-muted/30 p-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-5">
-      <CreatorEditFormFields client={client} userId={userId} now={currentTime} sync={sync} onRefreshCampaign={onRefreshCampaign} />
+  return <div className="space-y-2">
+    <div className="flex flex-wrap items-center justify-between gap-1">
+      <Button type="button" variant="ghost" size="sm" onClick={onBack} className="min-h-10 px-2"><ArrowLeft className="size-4" aria-hidden />กลับไปรายการ</Button>
+      {maySync && <Button type="button" size="sm" variant="outline" className="min-h-10 shrink-0" disabled={syncing} onClick={() => void syncSelected()}>
+        <RefreshCw className={`size-3.5 ${syncing ? "animate-spin" : ""}`} aria-hidden /> {syncing ? "กำลัง Sync…" : "Sync แคมเปญนี้"}
+      </Button>}
     </div>
+    <CreatorCampaignFormSection title="ตั้งค่าแคมเปญ" tag="แก้ไข">
+      <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2">
+        <div className="min-w-0 flex-1 basis-44">
+          <p className="break-words text-sm font-medium">{settings.campaignName}</p>
+          <p className="break-all text-xs text-muted-foreground">Campaign ID: {campaign.campaignId} · {statusText}</p>
+        </div>
+        <dl className="min-w-24">
+          <dt className="text-xs text-muted-foreground">ROI จริงวันนี้</dt>
+          <dd className="font-semibold tabular-nums">{roiText}</dd>
+        </dl>
+      </div>
+      <p role="status" className="text-xs text-muted-foreground">
+        {!maySync ? "อ่านอย่างเดียว · การเปิดแคมเปญเดิมอยู่ในหน้ารายการ"
+          : scope.syncCurrent ? "ยืนยันแคมเปญแล้ว · ยังไม่ได้บันทึกการเปลี่ยนแปลง"
+            : syncing ? "กำลังอ่านข้อมูลล่าสุดจาก TikTok…" : syncFailed ? "ยังยืนยันว่าแคมเปญนี้เปิดอยู่ไม่ได้"
+              : sync ? "ข้อมูลหมดอายุหรือแคมเปญเปลี่ยน กรุณา Sync ใหม่" : "Sync แคมเปญนี้ก่อนแก้ไข"}
+      </p>
+    </CreatorCampaignFormSection>
+    <div className="grid gap-2 sm:grid-cols-2 sm:[&>*:nth-child(n+3)]:col-span-2">
+      {activeCampaign && scope.campaignControl ? <CampaignControlPanel layout="roi-field" selectedCampaignId={campaign.campaignId}
+        fallbackRoi={settings.targetRoi ?? null} userId={userId} actionsEnabled={scope.syncCurrent}
+        syncedCampaignId={exactSync?.campaignId} onVerified={onRefreshCampaign} /> : <section className={formSection} aria-label="LIVE ROI Target">
+        <ReadOnlyField label="LIVE ROI Target" unit="×" value={settings.targetRoi == null ? null : formatValue(settings.targetRoi, "ratio")} />
+        {activeCampaign && <p className="text-xs text-muted-foreground">บัญชีนี้ยังแก้ ROI Target จากเว็บไม่ได้</p>}
+      </section>}
+      {activeCampaign && scope.budgetClientId ? <ManualBudgetPanel variant="campaign-form"
+        renderBetweenBudgetAndCeiling={(blockAutoStart) => scope.autoClientId && <CreatorEditAutoSettings clientId={scope.autoClientId}
+          userId={userId} campaignId={scope.autoCampaignId} blockAutoStart={blockAutoStart} />}
+        userId={userId} clientId={scope.budgetClientId} active={scope.syncCurrent} clients={[client]} onRefreshCampaign={onRefreshCampaign} /> : <section className={formSection} aria-label="Daily budget">
+        <ReadOnlyField label="Daily budget" unit="THB" value={settings.dailyBudgetMinor == null ? null : formatValue(settings.dailyBudgetMinor / 100, "decimal")} />
+      </section>}
+    </div>
+    {activeCampaign && !scope.budgetClientId && scope.autoClientId && <CreatorEditAutoSettings clientId={scope.autoClientId}
+      userId={userId} campaignId={scope.autoCampaignId} blockAutoStart={false} />}
+    <details className="rounded-lg border border-border bg-card">
+      <summary className="min-h-10 cursor-pointer px-3 py-2.5 text-sm font-medium sm:px-4">Schedule และชื่อแคมเปญ <span className="text-xs font-normal text-muted-foreground">· เวลาไทย · อ่านอย่างเดียว</span></summary>
+      <CreatorCampaignSchedule campaign={settings} embedded />
+    </details>
+    {activeCampaign && <details className="rounded-md border border-border bg-card px-3">
+      <summary className="min-h-10 cursor-pointer py-2.5 text-sm font-medium">ดูสัดส่วนงบที่ใช้วันนี้</summary>
+      <div className="pb-2"><CreatorEditBudgetMeter campaign={activeCampaign} /></div>
+    </details>}
+    {activeCampaign && scope.autoClientId === PILOT_BUDGET_CLIENT_ID && <CreatorAutoDiagnostics userId={userId} />}
   </div>;
 }
 
-export function CreatorOverviewEdit({ client, userId, onClose, ...props }: EditProps) {
-  const openingControl = useRef<HTMLElement | null>(null);
-  return <Dialog open={client !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-    <DialogContent className="inset-x-0 bottom-0 top-auto flex max-h-[calc(100dvh-1rem)] max-w-none translate-x-0 translate-y-0 flex-col rounded-b-none rounded-t-xl p-0 [&>button]:grid [&>button]:size-11 [&>button]:place-items-center sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100%-2rem)] sm:max-w-2xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl"
-      onOpenAutoFocus={() => { openingControl.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }}
-      onCloseAutoFocus={(event) => {
-        if (!openingControl.current?.isConnected) return;
-        event.preventDefault();
-        openingControl.current.focus({ preventScroll: true });
-      }}>
-      {client && <EditBody key={JSON.stringify([userId, client.clientId, client.advertiserId, client.tiktokAccountId])} client={client} userId={userId} {...props} />}
-    </DialogContent>
-  </Dialog>;
+export function CreatorCampaignEditPanel(props: CreatorEditPanelProps) {
+  const { userId, client, campaign } = props;
+  return <CreatorCampaignEditBody key={JSON.stringify([userId, client.clientId, client.advertiserId, client.tiktokAccountId, campaign.campaignId])} {...props} />;
 }

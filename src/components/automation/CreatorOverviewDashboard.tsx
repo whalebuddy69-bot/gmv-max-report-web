@@ -5,7 +5,7 @@ import { fetchAutomationPerformance, PILOT_BUDGET_CLIENT_ID, type AutomationClie
 import { fetchAdditionalBudgetCapStatus, fetchBudgetAutoOverviewStatus, fetchBudgetStatus, isBudgetCapClientId, type BudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { CreatorHistoricalPerformance } from "@/components/automation/CreatorHistoricalPerformance";
-import { CreatorOverviewEdit } from "@/components/automation/CreatorOverviewEdit";
+import { CreatorCampaignDialog } from "@/components/automation/CreatorCampaignDialog";
 import { CreatorOverviewTable } from "@/components/automation/CreatorOverviewTable";
 import { EmptyState } from "@/components/shared/StateViews";
 import { Button } from "@/components/ui/button";
@@ -178,7 +178,7 @@ export function CreatorOverviewDashboard({ data, userId, now, onSync, onRefreshC
       </label>
       <HistoryPane key={historyClient.clientId} client={historyClient} userId={userId} now={now} />
     </> : <EmptyState title="ยังไม่มีบัญชี Creator" />}
-    <CreatorOverviewEdit client={editClient} userId={userId} now={now}
+    <CreatorCampaignDialog client={editClient} userId={userId} now={now}
       onClose={() => setEditClientId(null)} onSync={onSync} onRefreshCampaign={onRefreshCampaign} />
   </>;
 }
