@@ -5,7 +5,7 @@ import { fetchAutomationPerformance, PILOT_BUDGET_CLIENT_ID, type AutomationClie
 import { fetchAdditionalBudgetCapStatus, fetchBudgetAutoOverviewStatus, fetchBudgetStatus, isBudgetCapClientId, type BudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { CreatorHistoricalPerformance } from "@/components/automation/CreatorHistoricalPerformance";
-import { CreatorCampaignDialog } from "@/components/automation/CreatorCampaignDialog";
+import { CreatorAccountCampaigns } from "@/components/automation/CreatorCampaignDialog";
 import { CreatorOverviewTable } from "@/components/automation/CreatorOverviewTable";
 import { EmptyState } from "@/components/shared/StateViews";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { buildCreatorOverviewRow, selectedCreators, summarizeCreatorOverview, to
 
 const metricFormat = new Intl.NumberFormat("th-TH", { maximumFractionDigits: 0 });
 const moneyFormat = new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB", maximumFractionDigits: 2 });
+const accountLabel = (client: AutomationClient) => client.tiktokUsername ? `@${client.tiktokUsername}` : client.displayName;
 const summaries = [
   { key: "activeAccounts", label: "บัญชีที่ Run Ads", help: "บัญชีที่พบแคมเปญเปิดอยู่" },
   { key: "costMinor", label: "Cost", help: "ยอดใช้แอด" },
@@ -61,7 +62,7 @@ function CreatorFilter({ clients, selection, setSelection }: {
         {clients.map((client) => <label key={client.clientId} className="flex min-h-10 cursor-pointer items-center gap-2 px-2 text-sm">
           <input type="checkbox" checked={selection === null || selection.has(client.clientId)} className="h-4 w-4 shrink-0 accent-primary"
             onChange={() => setSelection((current) => toggleCreatorSelection(current, client.clientId, knownIds))} />
-          <span className="break-words">{client.displayName}</span>
+          <span className="break-words">{accountLabel(client)}</span>
         </label>)}
       </div>
     </div>
@@ -92,12 +93,14 @@ function HistoryPane({ client, userId, now }: { client: AutomationClient; userId
   return <CreatorHistoricalPerformance client={client} result={result} payload={payload} />;
 }
 
-function OverviewPane({ clients, userId, now, onEdit }: {
+function OverviewPane({ clients, userId, now, onSync, onRefreshCampaign }: {
   clients: readonly AutomationClient[];
   userId: number;
   now: number;
-  onEdit: (clientId: string) => void;
+  onSync: () => Promise<AutomationOverview | null>;
+  onRefreshCampaign: () => void;
 }) {
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const budgetClients = clients.filter((client): client is AutomationClient & { clientId: BudgetCapClientId } => isBudgetCapClientId(client.clientId));
   const performance = useQueries({ queries: clients.map((client) => performanceQuery(client, userId, now)) });
   const caps = useQueries({ queries: budgetClients.map(({ clientId }) => ({
@@ -127,12 +130,26 @@ function OverviewPane({ clients, userId, now, onEdit }: {
       performance: result?.isSuccess ? result.data : undefined,
     }, Math.max(now, result?.dataUpdatedAt ?? 0));
   });
+  const byId = new Map(clients.map((client) => [client.clientId, client]));
+  function toggleExpanded(clientId: string) {
+    if (!byId.has(clientId)) return;
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      if (next.has(clientId)) next.delete(clientId);
+      else next.add(clientId);
+      return next;
+    });
+  }
 
   return <>
     <CreatorOverviewSummary rows={rows} />
-    <CreatorOverviewTable rows={rows} onEdit={onEdit} />
+    <CreatorOverviewTable rows={rows} expanded={expanded} onToggleExpand={toggleExpanded} renderExpanded={(row) => {
+      const client = byId.get(row.clientId);
+      return client ? <CreatorAccountCampaigns key={JSON.stringify([userId, client.clientId, client.advertiserId, client.tiktokAccountId])}
+        client={client} userId={userId} now={now} onSync={onSync} onRefreshCampaign={onRefreshCampaign} /> : null;
+    }} />
     <p className="text-xs leading-relaxed text-muted-foreground">
-      Performance วันนี้รวมเฉพาะชั่วโมงที่ TikTok ส่งมาของแคมเปญที่เปิดอยู่ ไม่รวมแคมเปญที่จบหรือปิดแล้ว · การพบแคมเปญเปิดอยู่ไม่ได้ยืนยันว่ากำลังส่งโฆษณาหรือกำลัง LIVE · «—» คือไม่มีข้อมูลหรือยังคำนวณไม่ได้
+      ยอดสรุประดับบัญชีใช้ข้อมูลเดิมของแคมเปญที่เปิดอยู่ · กดขยายเพื่อดูแคมเปญที่มี Cost วันนี้แยกกัน · Status “Live” หมายถึงแคมเปญเปิดอยู่ ไม่ยืนยันว่าห้องกำลังไลฟ์ · «—» คือไม่มีข้อมูลหรือยังคำนวณไม่ได้
     </p>
   </>;
 }
@@ -146,9 +163,7 @@ export function CreatorOverviewDashboard({ data, userId, now, onSync, onRefreshC
 }) {
   const [tab, setTab] = useState<"overview" | "history">("overview");
   const [selection, setSelection] = useState<CreatorSelection>(null);
-  const [editClientId, setEditClientId] = useState<string | null>(null);
   const [historyClientId, setHistoryClientId] = useState<string | null>(null);
-  const editClient = data.clients.find(({ clientId }) => clientId === editClientId) ?? null;
   const historyClient = data.clients.find(({ clientId }) => clientId === historyClientId) ?? data.clients[0] ?? null;
 
   return <>
@@ -164,21 +179,19 @@ export function CreatorOverviewDashboard({ data, userId, now, onSync, onRefreshC
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
         <div>
           <h2 className="text-base font-semibold">บัญชี Creator</h2>
-          <p className="text-xs text-muted-foreground">เลือกได้หลายบัญชี · Edit เพื่อดูและตั้งค่าเฉพาะบัญชีนั้น</p>
+          <p className="text-xs text-muted-foreground">เลือกได้หลายบัญชี · กดขยายที่บัญชีเพื่อดูและจัดการรายแคมเปญ</p>
         </div>
         <CreatorFilter clients={data.clients} selection={selection} setSelection={setSelection} />
       </div>
-      <OverviewPane clients={selectedCreators(data.clients, selection)} userId={userId} now={now} onEdit={setEditClientId} />
+      <OverviewPane clients={selectedCreators(data.clients, selection)} userId={userId} now={now} onSync={onSync} onRefreshCampaign={onRefreshCampaign} />
     </> : historyClient ? <>
       <label className="flex flex-wrap items-center gap-2 text-sm font-medium">
         บัญชีสำหรับดูรายงาน
         <select className="min-h-11 max-w-full rounded-lg border border-input bg-card px-3 text-base sm:text-sm" value={historyClient.clientId} onChange={(event) => setHistoryClientId(event.target.value)}>
-          {data.clients.map((client) => <option key={client.clientId} value={client.clientId}>{client.displayName}</option>)}
+          {data.clients.map((client) => <option key={client.clientId} value={client.clientId}>{accountLabel(client)}</option>)}
         </select>
       </label>
       <HistoryPane key={historyClient.clientId} client={historyClient} userId={userId} now={now} />
     </> : <EmptyState title="ยังไม่มีบัญชี Creator" />}
-    <CreatorCampaignDialog client={editClient} userId={userId} now={now}
-      onClose={() => setEditClientId(null)} onSync={onSync} onRefreshCampaign={onRefreshCampaign} />
   </>;
 }

@@ -5,6 +5,7 @@ import { creatorRowPerformance, isFreshAutomationClient, totalForReturnedHours }
 export type CreatorOverviewRow = {
   clientId: string;
   displayName: string;
+  tiktokUsername?: string | null;
   tiktokAccountId: string;
   access: "verified" | "stale" | "unavailable";
   active: boolean | null;
@@ -57,6 +58,7 @@ export function buildCreatorOverviewRow(client: AutomationClient, source: {
   return {
     clientId: client.clientId,
     displayName: client.displayName,
+    tiktokUsername: client.tiktokUsername ?? null,
     tiktokAccountId: client.tiktokAccountId,
     access: fresh ? "verified" : client.access === "verified" ? "stale" : "unavailable",
     active: fresh ? campaign !== null : null,

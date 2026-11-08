@@ -18,16 +18,14 @@ import { CampaignControlPanel, hasPendingCampaignOperation, parseCampaignRoiTent
 import { CreatorCampaignEditPanel, CreatorCampaignFormSection } from "./CreatorOverviewEdit";
 
 type DialogProps = {
-  client: AutomationClient | null;
+  client: AutomationClient;
   userId: number;
   now: number;
-  onClose: () => void;
   onRefreshCampaign: () => void;
   onSync: () => Promise<AutomationOverview | null>;
 };
 type Row = Omit<AutomationCampaignToday, "scheduleStartAt" | "scheduleEndAt"> & { scheduleStartAt?: string | null; scheduleEndAt?: string | null };
-type Screen = { type: "list" } | { type: "edit"; id: string } | { type: "create" } | { type: "recovery" } | { type: "lifecycle"; row: Row; action: "PAUSE" | "RESUME" };
-const listScreen = { type: "list" } as const;
+type Screen = { type: "edit"; id: string } | { type: "create" } | { type: "recovery" } | { type: "lifecycle"; row: Row; action: "PAUSE" | "RESUME" };
 const numericCampaign = /^[1-9]\d{5,30}$/;
 const adsManager = "https://ads.tiktok.com/i18n/";
 
@@ -42,6 +40,7 @@ function overviewFallback(client: AutomationClient, now: number): Row[] {
   if (!campaign) return [];
   return [{ campaignId: campaign.campaignId, campaignName: campaign.campaignName, operationStatus: "ENABLE",
     dailyBudgetMinor: campaign.dailyBudgetMinor, targetRoi: campaign.targetRoi, spendMinor: campaign.spendMinor, gmvMinor: null,
+    viewerBoostBudgetMinor: campaign.viewerBoostBudgetMinor,
     roi: null, activityToday: (campaign.spendMinor ?? 0) > 0,
     scheduleStartAt: campaign.scheduleStartAt, scheduleEndAt: campaign.scheduleEndAt }];
 }
@@ -57,91 +56,108 @@ export function allowedLifecycleIntent(row: Row, clientId: string, hasEnabled: b
   return hasEnabled ? null : "RESUME";
 }
 
-function CampaignRow({ row, clientId, hasEnabled, now, onEdit, onLifecycle }: {
-  row: Row; clientId: string; hasEnabled: boolean; now: number;
-  onEdit: (id: string) => void; onLifecycle: (id: string, action: "PAUSE" | "RESUME") => void;
+export function visibleCampaignBreakdown(rows: readonly Row[], now: number) {
+  // Keep an enabled campaign available to manage even if it has not spent yet.
+  // For closed/ended rows only include verified positive cost for this report day.
+  return rows.filter((row) => !endedTodayRow(row, now) || (row.spendMinor ?? 0) > 0)
+    .sort((a, b) => Number(endedTodayRow(a, now)) - Number(endedTodayRow(b, now)) ||
+      (b.spendMinor ?? -1) - (a.spendMinor ?? -1) || a.campaignId.localeCompare(b.campaignId));
+}
+
+function CampaignToggle({ row, action, onLifecycle }: {
+  row: Row; action: "PAUSE" | "RESUME" | null; onLifecycle: (row: Row, action: "PAUSE" | "RESUME", source: HTMLButtonElement) => void;
 }) {
   const enabled = row.operationStatus === "ENABLE";
-  const ended = endedTodayRow(row, now);
-  const action = allowedLifecycleIntent(row, clientId, hasEnabled, now);
-  return <li className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2">
-    <div className="min-w-0">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className="min-w-0 break-words text-sm font-semibold">{row.campaignName}</span>
-        <Badge variant={enabled && !ended ? "success" : "outline"} className="px-1.5 py-0 text-[10px]">{row.operationStatus === "DELETE" ? "ลบแล้ว" : enabled && ended ? "หมดเวลา" : enabled ? "เปิด" : "ปิด"}</Badge>
-      </div>
-      <p className="mt-0.5 break-all font-mono text-[11px] text-muted-foreground">{row.campaignId}</p>
-      {row.roi !== null && <p className="mt-0.5 text-xs text-muted-foreground">ROI วันนี้ <span className="font-medium text-foreground">{formatValue(row.roi, "ratio")}×</span></p>}
-    </div>
-    <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-      <button type="button" role="switch" aria-label={`${enabled ? "ปิด" : "เปิดอีกครั้ง"} ${row.campaignName}`} aria-checked={enabled} disabled={!action}
-        title={!action ? "ยังสลับสถานะรายการนี้จากเว็บไม่ได้" : "เปิดหน้าตรวจและยืนยัน"}
-        onClick={() => { if (action) onLifecycle(row.campaignId, action); }}
-        className="flex h-11 items-center rounded-md px-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-45">
-        <span aria-hidden className={cn("relative block h-5 w-9 rounded-full", enabled ? "bg-primary" : "bg-muted-foreground/45")}>
-          <span className={cn("absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow-sm", enabled && "translate-x-4")} />
-        </span>
-      </button>
-      <Button type="button" size="sm" variant="ghost" className="min-h-11 px-2" aria-label={`แก้ไข ${row.campaignName}`} onClick={() => onEdit(row.campaignId)}>
-        <Pencil className="size-3.5" aria-hidden /><span className="hidden sm:inline">แก้ไข</span>
-      </Button>
-    </div>
-  </li>;
+  return <button type="button" role="switch" aria-label={`${enabled ? "ปิด" : "เปิดอีกครั้ง"} ${row.campaignName}`} aria-checked={enabled} disabled={!action}
+    title={!action ? "ยังสลับสถานะรายการนี้จากเว็บไม่ได้" : "เปิดหน้าตรวจและยืนยัน"}
+    onClick={(event) => { if (action) onLifecycle(row, action, event.currentTarget); }}
+    className="inline-flex h-11 items-center rounded-md px-1.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-45">
+    <span aria-hidden className={cn("relative block h-5 w-9 rounded-full", enabled ? "bg-primary" : "bg-muted-foreground/45")}>
+      <span className={cn("absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow-sm", enabled && "translate-x-4")} />
+    </span>
+  </button>;
+}
+
+const metricColumns = ["Cost", "GMV", "ROI", "SKU Orders", "Cost / Order", "LIVE Views", "Cost / LIVE View", "Viewer Boost Budget"] as const;
+
+function breakdownCells(row: Row) {
+  const money = (value: number | null | undefined) => value == null ? "—" : formatValue(value / 100, "currency");
+  const count = (value: number | null | undefined) => value == null ? "—" : formatValue(value, "integer");
+  const unit = (n: number | null | undefined) => row.spendMinor !== null && n != null && n > 0 ? money(row.spendMinor / n) : "—";
+  return [money(row.spendMinor), money(row.gmvMinor), row.roi === null ? "—" : `${formatValue(row.roi, "ratio")}×`, count(row.skuOrders),
+    unit(row.skuOrders), count(row.liveViews), unit(row.liveViews), money(row.viewerBoostBudgetMinor)];
+}
+
+export function CreatorCampaignBreakdownTable({ rows, clientId, now, onEdit, onLifecycle }: {
+  rows: readonly Row[]; clientId: string; now: number;
+  onEdit: (row: Row, source: HTMLButtonElement) => void; onLifecycle: (row: Row, action: "PAUSE" | "RESUME", source: HTMLButtonElement) => void;
+}) {
+  const visible = visibleCampaignBreakdown(rows, now);
+  const hasEnabled = rows.some((row) => row.operationStatus === "ENABLE");
+  const statusClass = "sticky right-0 z-10 border-l bg-card shadow-[-2px_0_4px_rgba(15,23,42,0.06)]";
+  return <div role="region" aria-label="ผลแยกรายแคมเปญ" tabIndex={0} className="relative min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-md border bg-card focus-visible:outline-2 focus-visible:outline-ring">
+    <table className="w-full border-separate border-spacing-0 whitespace-nowrap text-xs">
+      <caption className="sr-only">แคมเปญที่เปิดหรือมี Cost วันนี้</caption>
+      <thead className="bg-muted/40">
+        <tr>
+          <th scope="col" className="border-b px-2 py-2 text-left font-semibold">On / Off</th>
+          <th scope="col" className="min-w-40 border-b px-2 py-2 text-left font-semibold">Campaign Name</th>
+          {metricColumns.map((label) => <th key={label} scope="col" className="border-b px-2.5 py-2 text-right font-semibold">{label}</th>)}
+          <th scope="col" className={cn(statusClass, "border-b px-2 py-2 text-center font-semibold")}>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {visible.map((row) => {
+          const ended = endedTodayRow(row, now);
+          const live = row.operationStatus === "ENABLE" && !ended;
+          return <tr key={row.campaignId} className="group">
+            <td className="border-b px-1.5 text-center group-last:border-b-0"><CampaignToggle row={row}
+              action={allowedLifecycleIntent(row, clientId, hasEnabled, now)} onLifecycle={onLifecycle} /></td>
+            <th scope="row" className="border-b px-2 py-1.5 text-left group-last:border-b-0">
+              <div className="flex items-center gap-1.5">
+                <div className="min-w-0 max-w-48 sm:max-w-64">
+                  <span className="block truncate text-sm font-semibold" title={row.campaignName}>{row.campaignName}</span>
+                  <span className="block font-mono text-[10px] font-normal text-muted-foreground">ID {row.campaignId}</span>
+                </div>
+                <Button type="button" variant="ghost" size="sm" className="min-h-10 shrink-0 px-2" aria-label={`แก้ไข ${row.campaignName}`} onClick={(event) => onEdit(row, event.currentTarget)}>
+                  <Pencil className="size-3.5" aria-hidden /><span className="hidden lg:inline">แก้ไข</span>
+                </Button>
+              </div>
+            </th>
+            {breakdownCells(row).map((value, index) => <td key={metricColumns[index]} className="border-b px-2.5 py-1.5 text-right tabular-nums group-last:border-b-0">{value}</td>)}
+            <td className={cn(statusClass, "border-b px-2 py-1.5 text-center group-last:border-b-0")}>
+              <Badge variant={live ? "success" : "outline"} title={live ? "แคมเปญเปิดอยู่ ไม่ใช่การยืนยันว่าห้องกำลัง LIVE" : undefined}>
+                {row.operationStatus === "DELETE" ? "ลบแล้ว" : live ? "Live" : row.operationStatus === "ENABLE" ? "จบแล้ว" : "ปิด"}
+              </Badge>
+            </td>
+          </tr>;
+        })}
+      </tbody>
+    </table>
+  </div>;
 }
 
 function OptionalAccountAuto({ client, userId }: { client: AutomationClient; userId: number }) {
   const [open, setOpen] = useState(false);
   if (!isBudgetCapClientId(client.clientId)) return null;
-  return <details className="rounded-lg border bg-card px-3" onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary className="min-h-10 cursor-pointer py-2.5 text-xs font-medium">จัดการ Auto Budget ของบัญชี</summary>
+  return <details className="rounded-md border bg-card px-2.5" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary className="min-h-9 cursor-pointer py-2 text-xs font-medium">จัดการ Auto Budget ของบัญชี</summary>
     {open && <div className="pb-2"><AutoBudgetStatusPanel clientId={client.clientId} userId={userId} campaignId={null} variant="campaign-form" /></div>}
   </details>;
 }
 
-function CampaignList({ client, rows, loading, coverage, now, userId, onEdit, onCreate, onLifecycle, onReload, onRecover }: {
-  client: AutomationClient; rows: Row[]; loading: boolean; coverage: AutomationCampaignsToday["coverage"]; now: number; userId: number;
-  onEdit: (id: string) => void; onCreate: () => void; onLifecycle: (id: string, action: "PAUSE" | "RESUME") => void; onReload: () => void; onRecover: () => void;
-}) {
-  const [allClosed, setAllClosed] = useState(false);
-  const enabled = rows.filter((row) => !endedTodayRow(row, now));
-  const closed = rows.filter((row) => endedTodayRow(row, now) && row.activityToday);
-  const hasEnabled = rows.some((row) => row.operationStatus === "ENABLE");
-  const renderRow = (row: Row) => <CampaignRow key={row.campaignId} row={row} clientId={client.clientId} hasEnabled={hasEnabled} now={now} onEdit={onEdit} onLifecycle={onLifecycle} />;
-  return <>
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div className="min-w-0">
-        <p className="text-xs text-muted-foreground">TikTok Account ID</p>
-        <p className="break-all font-mono text-xs font-medium">{client.tiktokAccountId}</p>
-      </div>
-      <Button type="button" size="sm" className="min-h-11" onClick={onCreate}><Plus className="size-4" aria-hidden />สร้างแคมเปญ</Button>
+const viewerBoostHelp = "https://ads.tiktok.com/resources/help/article/how-to-set-up-live-gmv-viewer-boost";
+
+function ViewerBoostInfo({ row }: { row: Row }) {
+  return <section className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border bg-card px-3 py-2" aria-label="Viewer Boost">
+    <div className="min-w-0">
+      <h3 className="text-sm font-semibold">Viewer Boost</h3>
+      <p className="text-xs text-muted-foreground">{row.viewerBoostBudgetMinor == null ? "ยังไม่มีค่างบที่ยืนยันได้สำหรับแคมเปญนี้ · ไม่ใช่ 0 บาท" : `งบแยก: ${formatBudgetBaht(row.viewerBoostBudgetMinor)}`}</p>
     </div>
-    <section aria-label="แคมเปญที่เปิดอยู่" className="overflow-hidden rounded-lg border bg-card">
-      <div className="flex min-h-10 items-center justify-between border-b px-3">
-        <h3 className="text-sm font-semibold">แคมเปญที่เปิดอยู่</h3><Badge variant="secondary">{enabled.length} รายการ</Badge>
-      </div>
-      {enabled.length ? <ul className="divide-y">{enabled.map(renderRow)}</ul> : <p className="px-3 py-2.5 text-xs text-muted-foreground">{loading ? "กำลังอ่านข้อมูล…" : "ไม่พบแคมเปญที่เปิดในข้อมูลที่อ่านได้"}</p>}
-    </section>
-    <section aria-label="แคมเปญปิดแล้วที่มีผลวันนี้" className="overflow-hidden rounded-lg border bg-card">
-      <div className="flex min-h-10 flex-wrap items-center justify-between gap-1 border-b px-3">
-        <h3 className="text-sm font-semibold">ปิดหรือจบแล้ว · มีผลวันนี้</h3><Badge variant="secondary">{closed.length} รายการที่พบ</Badge>
-      </div>
-      {closed.length ? <ul className="divide-y">{(allClosed ? closed : closed.slice(0, 4)).map(renderRow)}</ul> : <p className="px-3 py-2.5 text-xs text-muted-foreground">
-        {loading ? "กำลังอ่านแคมเปญของวันนี้…" : coverage === "complete" ? "ยังไม่พบแคมเปญที่ปิดแล้วและมีผลในรายงานวันนี้" : "ยังยืนยันรายการที่ปิดแล้วของวันนี้ไม่ได้"}
-      </p>}
-      {closed.length > 4 && <Button type="button" variant="ghost" size="sm" className="min-h-10 rounded-none border-t px-3" aria-expanded={allClosed} onClick={() => setAllClosed(!allClosed)}>{allClosed ? "แสดงน้อยลง" : `ดูทั้งหมด ${closed.length} รายการ`}</Button>}
-    </section>
-    <div className="flex min-w-0 items-start justify-between gap-2">
-      <p className="pt-2 text-xs text-muted-foreground">{coverage === "complete" ? "ตามรายงานวันนี้ · เวลาไทย · ตัวเลขอาจมาช้า" : loading ? "กำลังอัปเดตรายงานวันนี้" : "ข้อมูลวันนี้อาจยังไม่ครบ · รายการไม่พบไม่ได้แปลว่าไม่มีการยิงแอด"}
-        {client.clientId === PILOT_BUDGET_CLIENT_ID && hasEnabled && closed.some((row) => row.operationStatus === "DISABLE") && <span className="mt-1 block">หากจะเปิดรายการเดิม ให้ปิดแคมเปญที่เปิดอยู่ก่อน</span>}
-        {client.clientId !== PILOT_BUDGET_CLIENT_ID && <span className="mt-1 block">สถานะแคมเปญของบัญชีนี้ยังอ่านได้อย่างเดียว</span>}
-      </p>
-      <Button type="button" variant="ghost" size="sm" className="min-h-10 shrink-0 px-2" aria-label="อัปเดตรายการแคมเปญ" disabled={loading} onClick={onReload}>
-        <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden /> <span className="hidden sm:inline">อัปเดต</span>
-      </Button>
-    </div>
-    {client.clientId === PILOT_BUDGET_CLIENT_ID && hasPendingCampaignOperation(userId) && <Button type="button" variant="outline" size="sm" className="min-h-10" onClick={onRecover}>ตรวจผลคำสั่งที่ค้าง</Button>}
-    {!enabled.length && <OptionalAccountAuto client={client} userId={userId} />}
-  </>;
+    <a href={viewerBoostHelp} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 items-center gap-1 text-xs font-medium underline underline-offset-2">
+      วิธีตั้งใน TikTok <ExternalLink className="size-3" aria-hidden />
+    </a>
+  </section>;
 }
 
 function CreateDraft({ current, onBack }: { current: Row | null; onBack: () => void }) {
@@ -208,9 +224,9 @@ function Back({ onBack }: { onBack: () => void }) {
   return <Button type="button" variant="ghost" size="sm" className="min-h-10 px-2" onClick={onBack}><ArrowLeft className="size-4" aria-hidden />กลับไปรายการ</Button>;
 }
 
-function DialogBody({ client, userId, now, onSync, onRefreshCampaign }: Omit<DialogProps, "client" | "onClose"> & { client: AutomationClient }) {
-  const [screen, setScreen] = useState<Screen>(listScreen);
-  const viewport = useRef<HTMLDivElement | null>(null);
+export function CreatorAccountCampaigns({ client, userId, now, onSync, onRefreshCampaign }: DialogProps) {
+  const [screen, setScreen] = useState<Screen | null>(null);
+  const trigger = useRef<HTMLElement | null>(null);
   const date = bangkokDay(now);
   const report = useQuery({
     queryKey: ["automation", "campaigns-today", userId, client.clientId, client.advertiserId, client.tiktokAccountId, date],
@@ -219,57 +235,82 @@ function DialogBody({ client, userId, now, onSync, onRefreshCampaign }: Omit<Dia
   });
   const denied = report.error instanceof ApiError && [401, 403, 404].includes(report.error.status ?? 0);
   const snapshot = campaignsTodayForClient(!denied ? report.data : undefined, client, Math.max(now, report.dataUpdatedAt));
+  const coverage = snapshot ? report.isError ? "partial" : snapshot.coverage : "unavailable";
   const rows = snapshot?.campaigns ?? overviewFallback(client, now);
-  const selected = screen.type === "edit" ? rows.find((row) => row.campaignId === screen.id) : undefined;
+  const visible = visibleCampaignBreakdown(rows, now);
+  const selected = screen?.type === "edit" ? rows.find((row) => row.campaignId === screen.id) : undefined;
   const enabled = rows.filter((row) => !endedTodayRow(row, now));
   const current = enabled.length === 1 ? enabled[0]! : null;
-  function move(next: Screen) {
+  const accountName = client.tiktokUsername ? `@${client.tiktokUsername}` : client.displayName;
+  function open(next: Screen, source: HTMLElement) {
+    trigger.current = source;
     setScreen(next);
-    if (viewport.current) viewport.current.scrollTop = 0;
   }
+  const close = () => setScreen(null);
   function refresh() {
     onRefreshCampaign();
     void report.refetch();
   }
 
-  return <div className="flex min-h-0 flex-col">
-    <header className="shrink-0 border-b px-4 py-3 pr-16 sm:px-5 sm:pr-16">
-      <DialogTitle className="break-words text-lg font-semibold tracking-tight">แคมเปญ · {client.displayName}</DialogTitle>
-      <DialogDescription className="text-xs text-muted-foreground">LIVE GMV Max · {date} เวลาไทย</DialogDescription>
-    </header>
-    <div ref={viewport} className="min-h-0 space-y-2.5 overflow-y-auto overscroll-contain bg-muted/25 p-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-4">
-      {screen.type === "list" && <CampaignList client={client} rows={rows} coverage={snapshot ? report.isError ? "partial" : snapshot.coverage : "unavailable"} loading={report.isFetching}
-        userId={userId} now={now} onCreate={() => move({ type: "create" })} onEdit={(id) => move({ type: "edit", id })}
-        onLifecycle={(id, action) => { const row = rows.find((entry) => entry.campaignId === id); if (row) move({ type: "lifecycle", row, action }); }} onReload={refresh} onRecover={() => move({ type: "recovery" })} />}
-      {screen.type === "create" && <CreateDraft current={current} onBack={() => move(listScreen)} />}
-      {screen.type === "recovery" && client.clientId === PILOT_BUDGET_CLIENT_ID && <>
-        <Back onBack={() => move(listScreen)} />
-        <CampaignControlPanel layout="recovery" userId={userId} onVerified={refresh} />
-      </>}
-      {screen.type === "edit" && selected && <CreatorCampaignEditPanel key={selected.campaignId} client={client} campaign={selected} actualRoi={selected.roi} userId={userId}
-        now={now} onBack={() => move(listScreen)} onSync={onSync} onRefreshCampaign={refresh} />}
-      {screen.type === "lifecycle" && <>
-        <Back onBack={() => move(listScreen)} />
-        <CreatorCampaignFormSection title={screen.row.campaignName} tag="เปลี่ยนสถานะ">
-          <CampaignControlPanel key={`${screen.row.campaignId}:${screen.action}`} layout="lifecycle" userId={userId} selectedCampaignId={screen.row.campaignId}
-            lifecycleAction={screen.action} onVerified={refresh} />
-        </CreatorCampaignFormSection>
-      </>}
-      {screen.type === "edit" && !selected && <>
-        <Back onBack={() => move(listScreen)} />
-        <p role="status" className="rounded-lg border bg-card p-3 text-sm">ยังยืนยันข้อมูลของแคมเปญที่เลือกไม่ได้ กรุณากลับไปดูรายการล่าสุด</p>
-      </>}
+  return <section aria-label={`แคมเปญของ ${accountName}`} className="min-w-0 space-y-2">
+    <div className="flex flex-wrap items-center justify-between gap-1.5">
+      <div className="min-w-0">
+        <h3 className="text-sm font-semibold">แคมเปญวันนี้ <span className="font-normal text-muted-foreground">· {date}</span></h3>
+        <p className="text-[11px] text-muted-foreground">{visible.length} รายการ · รวมรายการเปิดอยู่และรายการที่มี Cost</p>
+      </div>
+      <div className="flex items-center gap-1">
+        <Button type="button" size="sm" className="min-h-10 px-2.5" onClick={(event) => open({ type: "create" }, event.currentTarget)}><Plus className="size-4" aria-hidden /> สร้างแคมเปญ</Button>
+        <Button type="button" variant="ghost" size="sm" className="min-h-10 px-2" aria-label="อัปเดตรายการแคมเปญ"
+          disabled={report.isFetching} onClick={refresh}><RefreshCw className={cn("size-4", report.isFetching && "animate-spin")} aria-hidden /></Button>
+      </div>
     </div>
-  </div>;
-}
-
-export function CreatorCampaignDialog({ client, userId, onClose, ...props }: DialogProps) {
-  const trigger = useRef<HTMLElement | null>(null);
-  return <Dialog open={client !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-    <DialogContent className="inset-x-0 bottom-0 top-auto flex max-h-[calc(100dvh-1rem)] max-w-none translate-x-0 translate-y-0 flex-col rounded-b-none rounded-t-xl p-0 [&>button]:grid [&>button]:size-10 [&>button]:place-items-center sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100%-2rem)] sm:max-w-2xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl"
-      onOpenAutoFocus={() => { trigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }}
-      onCloseAutoFocus={(event) => { if (trigger.current?.isConnected) { event.preventDefault(); trigger.current.focus({ preventScroll: true }); } }}>
-      {client && <DialogBody key={JSON.stringify([userId, client.clientId, client.advertiserId, client.tiktokAccountId])} client={client} userId={userId} {...props} />}
-    </DialogContent>
-  </Dialog>;
+    {visible.length ? <CreatorCampaignBreakdownTable rows={rows} clientId={client.clientId} now={now}
+      onEdit={(row, source) => open({ type: "edit", id: row.campaignId }, source)}
+      onLifecycle={(row, action, source) => open({ type: "lifecycle", row, action }, source)} /> : <p className="rounded-md border bg-card p-2.5 text-xs text-muted-foreground">
+      {report.isFetching ? "กำลังอ่านแคมเปญ…" : coverage === "complete" ? "ไม่พบแคมเปญเปิดอยู่หรือมี Cost วันนี้" : "ยังอ่านรายการแคมเปญของวันนี้ไม่ครบ"}
+    </p>}
+    <p className="text-[11px] text-muted-foreground">
+      {coverage === "complete" ? "รายงานรายแคมเปญ · เวลาไทย · ตัวเลขอาจมาช้า" : "ข้อมูลรายแคมเปญอาจยังไม่ครบ"}
+      {client.clientId !== PILOT_BUDGET_CLIENT_ID ? " · สถานะของบัญชีนี้อ่านได้อย่างเดียว" : enabled.length ? " · หากจะเปิดรายการเดิม ต้องปิดแคมเปญที่เปิดอยู่ก่อน" : ""}
+      {visible.some((row) => row.viewerBoostBudgetMinor == null) && <> · Viewer Boost ที่เป็น — ยังไม่มีข้อมูลยืนยัน <a className="underline underline-offset-2" href={viewerBoostHelp} target="_blank" rel="noopener noreferrer">ดูวิธีตั้งใน TikTok</a></>}
+    </p>
+    {client.clientId === PILOT_BUDGET_CLIENT_ID && hasPendingCampaignOperation(userId) && <Button type="button" variant="outline" size="sm" className="min-h-10" onClick={(event) => open({ type: "recovery" }, event.currentTarget)}>ตรวจผลคำสั่งที่ค้าง</Button>}
+    {!enabled.length && <OptionalAccountAuto client={client} userId={userId} />}
+    <Dialog open={screen !== null} onOpenChange={(active) => { if (!active) close(); }}>
+      <DialogContent className="inset-x-0 bottom-0 top-auto flex max-h-[calc(100dvh-1rem)] max-w-none translate-x-0 translate-y-0 flex-col rounded-b-none rounded-t-xl p-0 [&>button]:grid [&>button]:size-10 [&>button]:place-items-center sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100%-2rem)] sm:max-w-2xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl"
+        onCloseAutoFocus={(event) => { if (trigger.current?.isConnected) { event.preventDefault(); trigger.current.focus({ preventScroll: true }); } }}>
+        <div className="flex min-h-0 flex-col">
+          <header className="shrink-0 border-b px-4 py-3 pr-16 sm:px-5 sm:pr-16">
+            <DialogTitle className="break-words text-lg font-semibold tracking-tight">
+              {screen?.type === "edit" ? "แก้ไขแคมเปญ" : screen?.type === "create" ? "สร้างแคมเปญ" : "จัดการแคมเปญ"} · {accountName}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">LIVE GMV Max · {date} เวลาไทย</DialogDescription>
+          </header>
+          <div className="min-h-0 space-y-2.5 overflow-y-auto overscroll-contain bg-muted/25 p-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-4">
+            {screen?.type === "create" && <CreateDraft current={current} onBack={close} />}
+            {screen?.type === "recovery" && client.clientId === PILOT_BUDGET_CLIENT_ID && <>
+              <Back onBack={close} />
+              <CampaignControlPanel layout="recovery" userId={userId} onVerified={refresh} />
+            </>}
+            {screen?.type === "edit" && selected && <>
+              <CreatorCampaignEditPanel key={selected.campaignId} client={client} campaign={selected} actualRoi={selected.roi} userId={userId}
+                now={now} onBack={close} onSync={onSync} onRefreshCampaign={refresh} />
+              <ViewerBoostInfo row={selected} />
+            </>}
+            {screen?.type === "lifecycle" && <>
+              <Back onBack={close} />
+              <CreatorCampaignFormSection title={screen.row.campaignName} tag="เปลี่ยนสถานะ">
+                <CampaignControlPanel key={`${screen.row.campaignId}:${screen.action}`} layout="lifecycle" userId={userId} selectedCampaignId={screen.row.campaignId}
+                  lifecycleAction={screen.action} onVerified={refresh} />
+              </CreatorCampaignFormSection>
+            </>}
+            {screen?.type === "edit" && !selected && <>
+              <Back onBack={close} />
+              <p role="status" className="rounded-lg border bg-card p-3 text-sm">ยังยืนยันข้อมูลของแคมเปญที่เลือกไม่ได้ กรุณากลับไปดูรายการล่าสุด</p>
+            </>}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  </section>;
 }

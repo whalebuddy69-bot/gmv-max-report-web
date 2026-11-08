@@ -28,6 +28,7 @@ const clientSchema = z.object({
   displayName: label,
   advertiserId: id,
   tiktokAccountId: id,
+  tiktokUsername: z.string().regex(/^[A-Za-z0-9_.]{1,24}$/).refine((value) => !value.endsWith(".")).nullable().optional(),
   tiktokAccountIdVerified: z.boolean().optional(),
   access: z.enum(["verified", "unavailable"]),
   accessReason: z.enum(["needs-authorization", "identity-unverified", "upstream-unavailable"]).optional(),

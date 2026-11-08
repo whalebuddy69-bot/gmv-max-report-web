@@ -1,10 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
 import { fetchScopedCampaignControlStatus } from "@/api/automationCampaign";
 import { automationCampaignsTodayPath, automationCampaignsTodaySchema, fetchAutomationCampaignsToday, type AutomationCampaignToday } from "@/api/automationCampaignsToday";
 import { http } from "@/api/client";
-import { allowedLifecycleIntent, campaignsTodayForClient, CreatorCampaignDialog, endedTodayRow } from "./CreatorCampaignDialog";
+import { allowedLifecycleIntent, campaignsTodayForClient, CreatorAccountCampaigns, CreatorCampaignBreakdownTable, endedTodayRow, visibleCampaignBreakdown } from "./CreatorCampaignDialog";
 
 const instant = "2026-11-08T07:00:00Z";
 const now = Date.parse(instant) + 500;
@@ -66,7 +67,31 @@ describe("Creator campaign picker", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("does not mount any campaign or form when closed", () => {
-    expect(renderToStaticMarkup(<CreatorCampaignDialog client={null} userId={1} now={now} onClose={() => {}} onRefreshCampaign={() => {}} onSync={async () => null} />)).toBe("");
+  it("keeps the create and edit form unmounted until requested from the expanded row", () => {
+    const queryClient = new QueryClient();
+    const html = renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <CreatorAccountCampaigns client={{ ...client, tiktokUsername: "fixture_creator" }} userId={1} now={now} onRefreshCampaign={() => {}} onSync={async () => null} />
+    </QueryClientProvider>);
+    expect(html).toContain("@fixture_creator");
+    expect(html).toContain("สร้างแคมเปญ");
+    expect(html).not.toContain('role="dialog"');
+    expect(html).not.toContain("LIVE ROI Target");
+    queryClient.clear();
+  });
+
+  it("includes every verified positive-cost row and keeps an enabled zero-cost campaign visible for management", () => {
+    const noCost = { ...stopped, campaignId: "12345681", spendMinor: 0, roi: null };
+    const noReport = { ...stopped, campaignId: "12345682", spendMinor: null, roi: null };
+    const liveWithoutSpend = { ...active, spendMinor: 0, roi: null };
+    expect(visibleCampaignBreakdown([stopped, noCost, noReport, liveWithoutSpend], now).map((row) => row.campaignId))
+      .toEqual([active.campaignId, stopped.campaignId]);
+  });
+
+  it("places the switch before the name and status on the right with scoped campaign metrics", () => {
+    const html = renderToStaticMarkup(<CreatorCampaignBreakdownTable rows={[{ ...active, skuOrders: 5, liveViews: 20 },
+      { ...stopped, viewerBoostBudgetMinor: 125_000 }]} clientId={client.clientId} now={now} onEdit={() => {}} onLifecycle={() => {}} />);
+    expect(html.indexOf('role="switch"')).toBeLessThan(html.indexOf(active.campaignName));
+    expect(html.indexOf("Viewer Boost Budget")).toBeLessThan(html.indexOf(">Status<"));
+    for (const item of [active.campaignId, stopped.campaignId, "฿1,000.00", "฿2,500.00", "2.50×", "฿200.00", "฿50.00", "฿1,250.00", ">Live<", ">ปิด<"]) expect(html).toContain(item);
   });
 });

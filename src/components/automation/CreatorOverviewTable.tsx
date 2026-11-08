@@ -1,5 +1,5 @@
-import { useMemo, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowLeftRight, ArrowUp, ArrowUpDown, ChevronDown, Columns3, Pencil } from "lucide-react";
+import { Fragment, useId, useMemo, useState, type ReactNode } from "react";
+import { ArrowDown, ArrowLeftRight, ArrowUp, ArrowUpDown, ChevronDown, Columns3 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BANGKOK } from "@/lib/automation";
@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 const groups = [
   {
     id: "setup", label: "Setup", columns: [
+      { id: "status", label: "Status", description: "Live หมายถึงแคมเปญเปิดอยู่ ไม่ได้ยืนยันว่าห้องกำลัง LIVE" },
       { id: "scheduleTime", label: "Schedule time", description: "กำหนดการ (เวลาไทย)" },
       { id: "autoBudget", label: "Auto budget increase", description: "สถานะเพิ่มงบอัตโนมัติ" },
       { id: "totalBudgetMinor", label: "Total Budget", description: "งบที่ตั้งไว้", format: "money" },
@@ -33,6 +34,8 @@ const groups = [
 type Group = (typeof groups)[number];
 type Column = Group["columns"][number];
 type ColumnId = Column["id"];
+type OptionalColumn = Exclude<Column, { id: "status" }>;
+type OptionalColumnId = OptionalColumn["id"];
 type SortKey = "displayName" | ColumnId;
 export type CreatorOverviewTableSort = { key: SortKey; direction: "ascending" | "descending" };
 const initialSort: CreatorOverviewTableSort = { key: "displayName", direction: "ascending" };
@@ -47,13 +50,18 @@ const autoStates = {
 } as const;
 
 function sortValue(row: CreatorOverviewRow, key: Exclude<SortKey, "displayName">): number | null {
+  if (key === "status") return row.active === null ? null : Number(row.active);
   if (key === "autoBudget") return row.autoBudget === null ? null : autoStates[row.autoBudget].order;
   const value = key === "scheduleTime" ? Date.parse(row.scheduleTime?.startAt ?? "") : row[key];
   return value !== null && Number.isFinite(value) ? value : null;
 }
 
+function accountName(row: CreatorOverviewRow): string {
+  return row.tiktokUsername ? `@${row.tiktokUsername.replace(/^@/, "")}` : row.displayName;
+}
+
 function byIdentity(a: CreatorOverviewRow, b: CreatorOverviewRow): number {
-  return names.compare(a.displayName, b.displayName) || a.clientId.localeCompare(b.clientId);
+  return names.compare(accountName(a), accountName(b)) || a.clientId.localeCompare(b.clientId);
 }
 
 /** Unknown values stay below known ones in both directions; ties remain predictable after refresh. */
@@ -97,6 +105,11 @@ function Schedule({ schedule }: { schedule: CreatorOverviewRow["scheduleTime"] }
 }
 
 function Cell({ column, row }: { column: Column; row: CreatorOverviewRow }) {
+  if (column.id === "status") {
+    const label = row.active === true ? "Live" : row.active === false ? "Off" : "—";
+    const title = row.active === true ? column.description : row.active === false ? "ไม่พบแคมเปญที่เปิดอยู่" : "ยังยืนยันสถานะไม่ได้";
+    return <Badge variant={row.active === true ? "success" : "outline"} title={title} aria-label={`${label}: ${title}`}>{label}</Badge>;
+  }
   if (column.id === "scheduleTime") return <Schedule schedule={row.scheduleTime} />;
   if (column.id === "autoBudget") {
     if (row.autoBudget === null) return <NoValue />;
@@ -137,96 +150,119 @@ const accessLabels: Record<CreatorOverviewRow["access"], { label: string; title:
   unavailable: { label: "ยังเข้าถึงไม่ได้", title: "ยังตรวจสอบสิทธิ์เข้าถึงบัญชีไม่ได้" },
 };
 
-function Identity({ row, onEdit }: { row: CreatorOverviewRow; onEdit: (clientId: string) => void }) {
+function Identity({ row, expanded, panelId, onToggleExpand }: {
+  row: CreatorOverviewRow;
+  expanded: boolean;
+  panelId: string;
+  onToggleExpand: (clientId: string) => void;
+}) {
   const access = accessLabels[row.access];
-  return <>
-    <span className="block truncate font-semibold" title={row.displayName}>{row.displayName}</span>
-    <span className="block text-[10px] font-normal text-muted-foreground tabular" title={row.tiktokAccountId}>{row.tiktokAccountId}</span>
-    <span className="block text-[10px] font-normal text-muted-foreground" title={access.title}>
-      {row.active === true && <span className="font-semibold text-emerald-700" title={row.campaignName ?? undefined}>เปิดแคมเปญ · </span>}{access.label}
+  const name = accountName(row);
+  return <button type="button" aria-label={`${expanded ? "ย่อ" : "ขยาย"}แคมเปญของ ${name}`} aria-expanded={expanded}
+    aria-controls={expanded ? panelId : undefined} onClick={() => onToggleExpand(row.clientId)}
+    className={cn("grid min-h-10 w-full min-w-0 grid-cols-[1rem_minmax(0,1fr)] items-center gap-1 rounded-md px-1 py-0.5 text-start hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring", expanded && "bg-muted/70")}>
+    <ChevronDown className={cn("size-4 text-muted-foreground transition-transform motion-reduce:transition-none", !expanded && "-rotate-90")} aria-hidden />
+    <span className="min-w-0">
+      <span className="block truncate text-xs font-semibold sm:text-sm" title={row.tiktokUsername ? name : `${name} · ยังไม่ยืนยันชื่อผู้ใช้ TikTok`}>{name}</span>
+      <span className="block truncate font-mono text-[10px] font-normal text-muted-foreground tabular" title={row.tiktokAccountId}>{row.tiktokAccountId}</span>
+      <span className="sr-only">{access.label}</span>
     </span>
-    <Button type="button" variant="outline" size="sm" className="mt-1.5 h-8 gap-1.5 px-2" aria-label={`Edit ${row.displayName}`} onClick={() => onEdit(row.clientId)}>
-      <Pencil aria-hidden="true" className="h-3 w-3" /> Edit
-    </Button>
-  </>;
+  </button>;
 }
 
 const frozenCell = "sticky left-0 border-r bg-card shadow-[2px_0_4px_0_rgba(15,23,42,0.05)]";
 
-export function CreatorOverviewTableView({ rows, hidden, sort, onEdit, onSort }: {
+type CreatorOverviewTableProps = {
   rows: readonly CreatorOverviewRow[];
-  hidden: ReadonlySet<ColumnId>;
+  expanded: ReadonlySet<string>;
+  onToggleExpand: (clientId: string) => void;
+  renderExpanded: (row: CreatorOverviewRow) => ReactNode;
+};
+
+export function CreatorOverviewTableView({ rows, hidden, sort, expanded, onToggleExpand, renderExpanded, onSort }: CreatorOverviewTableProps & {
+  hidden: ReadonlySet<OptionalColumnId>;
   sort: CreatorOverviewTableSort;
-  onEdit: (clientId: string) => void;
   onSort: (key: SortKey) => void;
 }) {
-  const visibleGroups = groups.map((group) => ({ ...group, columns: group.columns.filter((column) => !hidden.has(column.id)) }))
+  const panelPrefix = useId();
+  const visibleGroups = groups.map((group) => ({ ...group, columns: group.columns.filter((column) => column.id === "status" || !hidden.has(column.id)) }))
     .filter(({ columns }) => columns.length > 0);
   const visibleColumns = visibleGroups.flatMap((group) => group.columns);
   const groupStarts = new Set(visibleGroups.map(({ columns }) => columns[0]?.id));
-  const grouped = visibleGroups.length > 0;
   const header = (sortKey: SortKey, label: string, description?: string): ReactNode => <SortButton label={label} description={description} sortKey={sortKey} sort={sort} onSort={onSort} />;
-  return <div role="region" aria-label="ตาราง Creator และผลโฆษณา" tabIndex={0} className="scrollbar-thin relative max-w-full overflow-x-auto overscroll-x-contain rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+  return <div role="region" aria-label="ตาราง Creator และผลโฆษณา" tabIndex={0} className="scrollbar-thin relative w-full min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-lg border [container-type:inline-size] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
     <table className="w-full table-auto border-separate border-spacing-0 text-left text-sm">
       <caption className="sr-only">ภาพรวมการตั้งค่าและผลโฆษณาแยกตาม Creator</caption>
-      <colgroup><col className="w-36 sm:w-44" /></colgroup>
+      <colgroup><col className="w-32 sm:w-40" /></colgroup>
       {visibleGroups.map(({ id, columns }) => <colgroup key={id} span={columns.length} />)}
       <thead>
         <tr>
-          <th scope="col" rowSpan={grouped ? 2 : undefined} aria-sort={sort.key === "displayName" ? sort.direction : undefined} className={cn(frozenCell, "z-20 min-w-36 border-b px-2 py-2 align-bottom sm:min-w-44 sm:px-3")}>
+          <th scope="col" rowSpan={2} aria-sort={sort.key === "displayName" ? sort.direction : undefined} className={cn(frozenCell, "z-20 min-w-32 border-b px-1.5 py-1.5 align-bottom sm:min-w-40 sm:px-2")}>
             {header("displayName", "TikTok account")}
-            <span className="block px-1 text-[11px] font-normal text-muted-foreground">บัญชี / Edit</span>
           </th>
           {visibleGroups.map(({ id, label, columns }, index) => <th key={id} scope="colgroup" colSpan={columns.length} className={cn("border-b bg-muted/70 px-3 py-2 text-xs font-semibold", index > 0 && "border-l")}>
             {label}
           </th>)}
         </tr>
-        {grouped && <tr>{visibleColumns.map((column) => <th key={column.id} scope="col" aria-sort={sort.key === column.id ? sort.direction : undefined}
-          className={cn("min-w-28 border-b bg-card px-2 py-1 align-middle whitespace-nowrap", "format" in column && "text-right", groupStarts.has(column.id) && column.id !== visibleColumns[0]?.id && "border-l")}>
+        <tr>{visibleColumns.map((column) => <th key={column.id} scope="col" aria-sort={sort.key === column.id ? sort.direction : undefined}
+          className={cn("border-b bg-card px-2 py-1 align-middle whitespace-nowrap", column.id === "status" ? "min-w-20" : "min-w-28", "format" in column && "text-right", groupStarts.has(column.id) && column.id !== visibleColumns[0]?.id && "border-l")}>
           {header(column.id, column.label, column.description)}
-        </th>)}</tr>}
+        </th>)}</tr>
       </thead>
       <tbody>
-        {rows.map((row) => <tr key={row.clientId} className="group">
-          <th scope="row" className={cn(frozenCell, "z-10 border-b px-3 py-2 align-middle group-last:border-b-0")}>
-            <div className="max-w-28 sm:max-w-36"><Identity row={row} onEdit={onEdit} /></div>
-          </th>
-          {visibleColumns.map((column) => <td key={column.id}
-            className={cn("border-b px-3 py-2 align-middle whitespace-nowrap group-hover:bg-muted/35 group-last:border-b-0", "format" in column && "tabular text-right font-medium", groupStarts.has(column.id) && column.id !== visibleColumns[0]?.id && "border-l")}>
-            <Cell column={column} row={row} />
-          </td>)}
-        </tr>)}
+        {rows.map((row) => {
+          const isExpanded = expanded.has(row.clientId);
+          const panelId = `${panelPrefix}-campaigns-${row.clientId}`;
+          return <Fragment key={row.clientId}>
+            <tr className="group">
+              <th scope="row" className={cn(frozenCell, "z-10 border-b px-1.5 py-1 align-middle group-last:border-b-0 sm:px-2")}>
+                <div className="w-[7.125rem] sm:w-36"><Identity row={row} expanded={isExpanded} panelId={panelId} onToggleExpand={onToggleExpand} /></div>
+              </th>
+              {visibleColumns.map((column) => <td key={column.id}
+                className={cn("border-b px-2.5 py-1.5 align-middle whitespace-nowrap group-hover:bg-muted/35 group-last:border-b-0", "format" in column && "tabular text-right font-medium", groupStarts.has(column.id) && column.id !== visibleColumns[0]?.id && "border-l")}>
+                <Cell column={column} row={row} />
+              </td>)}
+            </tr>
+            {isExpanded && <tr>
+              <td colSpan={1 + visibleColumns.length} className="border-b bg-muted/35 p-0">
+                {/* The table can be wider than its viewport. Anchor the detail
+                    panel to the viewport without changing the summary columns. */}
+                <div id={panelId} className="sticky left-0 min-w-0 max-w-full px-2.5 py-2.5 [width:100cqi] sm:px-3">
+                  {renderExpanded(row)}
+                </div>
+              </td>
+            </tr>}
+          </Fragment>;
+        })}
         {rows.length === 0 && <tr><td colSpan={1 + visibleColumns.length} className="px-3 py-5 text-sm text-muted-foreground">ไม่พบ Creator ที่ตรงกับตัวกรอง</td></tr>}
       </tbody>
     </table>
   </div>;
 }
 
-export function CreatorOverviewTable({ rows, onEdit }: {
-  rows: readonly CreatorOverviewRow[];
-  onEdit: (clientId: string) => void;
-}) {
-  const [{ hidden, sort }, setPreferences] = useState<{ hidden: ReadonlySet<ColumnId>; sort: CreatorOverviewTableSort }>(() => ({ hidden: new Set(), sort: initialSort }));
+export function CreatorOverviewTable({ rows, expanded, onToggleExpand, renderExpanded }: CreatorOverviewTableProps) {
+  const [{ hidden, sort }, setPreferences] = useState<{ hidden: ReadonlySet<OptionalColumnId>; sort: CreatorOverviewTableSort }>(() => ({ hidden: new Set(), sort: initialSort }));
   const sorted = useMemo(() => sortCreatorOverviewRows(rows, sort), [rows, sort]);
-  const changeVisibility = (columns: readonly Column[], visible: boolean) => setPreferences((previous) => {
+  const changeVisibility = (columns: readonly OptionalColumn[], visible: boolean) => setPreferences((previous) => {
     const next = new Set(previous.hidden);
     for (const { id } of columns) {
       if (visible) next.delete(id);
       else next.add(id);
     }
-    return { hidden: next, sort: previous.sort.key !== "displayName" && next.has(previous.sort.key) ? initialSort : previous.sort };
+    return { hidden: next, sort: previous.sort.key !== "displayName" && previous.sort.key !== "status" && next.has(previous.sort.key) ? initialSort : previous.sort };
   });
   const onSort = (key: SortKey) => setPreferences((previous) => ({ ...previous, sort: { key, direction: previous.sort.key === key && previous.sort.direction === "ascending" ? "descending" : "ascending" } }));
   return <div className="min-w-0 space-y-2.5">
     <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-      <p className="flex min-h-8 items-center gap-1.5 text-xs text-muted-foreground"><ArrowLeftRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0" /> เลื่อนซ้าย–ขวาเพื่อดูทุกคอลัมน์ · กดหัวตารางเพื่อเรียง</p>
+      <p className="flex min-h-8 items-center gap-1.5 text-xs text-muted-foreground"><ArrowLeftRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0" /> กดชื่อบัญชีเพื่อดูแคมเปญ · เลื่อนซ้าย–ขวาเพื่อดูทุกคอลัมน์</p>
       <details className="group/columns grow sm:grow-0">
         <summary className="flex min-h-8 w-fit cursor-pointer list-none items-center gap-1.5 rounded-md border bg-card px-2.5 py-1 text-xs font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
           <Columns3 aria-hidden="true" className="h-4 w-4" /> คอลัมน์
           <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 group-open/columns:rotate-180" />
         </summary>
         <div className="mt-2 grid gap-2 rounded-lg border bg-card p-2.5 sm:grid-cols-2">
-          {groups.map(({ id, label, columns }) => {
+          {groups.map(({ id, label, columns: groupColumns }) => {
+            const columns = groupColumns.filter((column): column is OptionalColumn => column.id !== "status");
             const allShown = columns.every((column) => !hidden.has(column.id));
             return <fieldset key={id} className="grid min-w-0 grid-cols-2 gap-x-1 rounded-md border px-2.5 pb-1.5 sm:grid-cols-1">
               <legend className="px-1 text-xs font-semibold">{label}</legend>
@@ -238,10 +274,10 @@ export function CreatorOverviewTable({ rows, onEdit }: {
               </label>)}
             </fieldset>;
           })}
-          <p className="px-1 text-[11px] text-muted-foreground sm:col-span-2">TikTok account และ Edit แสดงเสมอ</p>
+          <p className="px-1 text-[11px] text-muted-foreground sm:col-span-2">TikTok account และ Status แสดงเสมอ</p>
         </div>
       </details>
     </div>
-    <CreatorOverviewTableView rows={sorted} hidden={hidden} sort={sort} onEdit={onEdit} onSort={onSort} />
+    <CreatorOverviewTableView rows={sorted} hidden={hidden} sort={sort} expanded={expanded} onToggleExpand={onToggleExpand} renderExpanded={renderExpanded} onSort={onSort} />
   </div>;
 }

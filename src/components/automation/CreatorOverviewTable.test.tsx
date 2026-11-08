@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CreatorOverviewRow } from "@/lib/creatorOverview";
 import { CreatorOverviewTable, CreatorOverviewTableView, sortCreatorOverviewRows } from "./CreatorOverviewTable";
 
@@ -23,6 +23,7 @@ const base = {
   liveViews: null,
   costPerLiveViewMinor: null,
 } satisfies CreatorOverviewRow;
+const collapsed = { expanded: new Set<string>(), onToggleExpand: () => {}, renderExpanded: () => null };
 
 describe("Creator overview sorting", () => {
   it("sorts numerically without mutating input; missing values remain last in either direction", () => {
@@ -48,13 +49,24 @@ describe("Creator overview sorting", () => {
     expect(sortCreatorOverviewRows(rows, { key: "liveViews", direction: "descending" }).map(({ clientId }) => clientId)).toEqual(["2", "5", "10"]);
     expect(sortCreatorOverviewRows(rows, { key: "scheduleTime", direction: "ascending" }).map(({ clientId }) => clientId)).toEqual(["2", "10", "5"]);
   });
+
+  it("sorts status by known enabled/disabled first and name by the visible username", () => {
+    const rows: CreatorOverviewRow[] = [
+      { ...base, clientId: "x", displayName: "Alpha", tiktokUsername: "zebra", active: false },
+      { ...base, clientId: "y", displayName: "Zulu", tiktokUsername: "alpha", active: true },
+      { ...base, clientId: "z", displayName: "Zulu 2", active: null },
+    ];
+    expect(sortCreatorOverviewRows(rows, { key: "status", direction: "ascending" }).map(({ clientId }) => clientId)).toEqual(["x", "y", "z"]);
+    expect(sortCreatorOverviewRows(rows, { key: "status", direction: "descending" }).map(({ clientId }) => clientId)).toEqual(["y", "x", "z"]);
+    expect(sortCreatorOverviewRows(rows.slice(0, 2), { key: "displayName", direction: "ascending" }).map(({ clientId }) => clientId)).toEqual(["y", "x"]);
+  });
 });
 
 describe("Creator overview table", () => {
   it("offers two column groups, scoped row controls, and distinct real zero / missing values", () => {
-    const row = { ...base, active: true, costMinor: 12_345, gmvMinor: 0, skuOrders: 0,
+    const row = { ...base, active: true, tiktokUsername: "creator_verified", costMinor: 12_345, gmvMinor: 0, skuOrders: 0,
       scheduleTime: { startAt: "2026-11-07T22:00:00Z", endAt: "2026-11-08T01:00:00Z" }, autoBudget: "blocked" as const };
-    const html = renderToStaticMarkup(<CreatorOverviewTable rows={[row]} onEdit={() => {}} />);
+    const html = renderToStaticMarkup(<CreatorOverviewTable rows={[row]} {...collapsed} />);
     expect(html).toContain('role="region"');
     expect(html).toContain('tabindex="0"');
     expect(html).toContain('aria-sort="ascending"');
@@ -62,7 +74,13 @@ describe("Creator overview table", () => {
     expect(html.match(/scope="colgroup"/g)).toHaveLength(2);
     expect(html).toContain('aria-label="ซ่อนคอลัมน์ทั้งหมดใน Setup"');
     expect(html).toContain('aria-label="ซ่อนคอลัมน์ทั้งหมดใน Performance"');
-    expect(html).toContain('aria-label="Edit Creator 1"');
+    expect(html).toContain('aria-label="ขยายแคมเปญของ @creator_verified"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("Edit");
+    expect(html).toContain("Live หมายถึงแคมเปญเปิดอยู่ ไม่ได้ยืนยันว่าห้องกำลัง LIVE");
+    expect(html.indexOf('aria-label="Status:')).toBeLessThan(html.indexOf('aria-label="Schedule time:'));
+    expect(html).toContain("TikTok account และ Status แสดงเสมอ");
+    expect(html.match(/type="checkbox"/g)).toHaveLength(12);
     expect(html).toContain("1234567890123456789");
     expect(html).toContain("05:00–08:00");
     expect(html).toContain("พัก · ต้องตรวจสอบ");
@@ -71,24 +89,42 @@ describe("Creator overview table", () => {
     expect(html).toContain("ไม่มีข้อมูล");
   });
 
-  it("adjusts group spans and keeps the TikTok account / Edit column when other columns are hidden", () => {
+  it("adjusts group spans and keeps TikTok account and Status when other columns are hidden", () => {
     const onlyCost = renderToStaticMarkup(<CreatorOverviewTableView rows={[base]} hidden={new Set([
       "scheduleTime", "autoBudget", "totalBudgetMinor", "maxBudgetMinor", "viewerBoostBudgetMinor", "roiTarget", "gmvMinor",
       "skuOrders", "costPerOrderMinor", "liveViews", "costPerLiveViewMinor",
-    ])} sort={{ key: "costMinor", direction: "descending" }} onEdit={() => {}} onSort={() => {}} />);
-    expect(onlyCost.match(/scope="colgroup"/g)).toHaveLength(1);
+    ])} sort={{ key: "costMinor", direction: "descending" }} {...collapsed} onSort={() => {}} />);
+    expect(onlyCost.match(/scope="colgroup"/g)).toHaveLength(2);
     expect(onlyCost).toContain('colSpan="1"');
     expect(onlyCost).toContain('aria-sort="descending"');
     expect(onlyCost).toContain('aria-label="Cost: เรียงน้อยไปมาก (ASC)"');
-    expect(onlyCost).toContain('aria-label="Edit Creator 1"');
+    expect(onlyCost).toContain('aria-label="ขยายแคมเปญของ Creator 1"');
+    expect(onlyCost).toContain('aria-label="Status:');
     expect(onlyCost).not.toContain("Schedule time");
 
     const onlyAccount = renderToStaticMarkup(<CreatorOverviewTableView rows={[base]} hidden={new Set([
       "scheduleTime", "autoBudget", "totalBudgetMinor", "maxBudgetMinor", "viewerBoostBudgetMinor", "roiTarget", "costMinor", "gmvMinor",
       "skuOrders", "costPerOrderMinor", "liveViews", "costPerLiveViewMinor",
-    ])} sort={{ key: "displayName", direction: "ascending" }} onEdit={() => {}} onSort={() => {}} />);
-    expect(onlyAccount).not.toContain('scope="colgroup"');
-    expect(onlyAccount).not.toContain("rowSpan");
-    expect(onlyAccount).toContain('aria-label="Edit Creator 1"');
+    ])} sort={{ key: "displayName", direction: "ascending" }} {...collapsed} onSort={() => {}} />);
+    expect(onlyAccount.match(/scope="colgroup"/g)).toHaveLength(1);
+    expect(onlyAccount).toContain('rowspan="2"');
+    expect(onlyAccount).toContain('aria-label="ขยายแคมเปญของ Creator 1"');
+    expect(onlyAccount).toContain('aria-label="Status:');
+  });
+
+  it("renders the selected account details only, in one full-width row bound to the disclosure", () => {
+    const another = { ...base, clientId: "another", displayName: "Another Creator" };
+    const renderExpanded = vi.fn((row: CreatorOverviewRow) => <p>{`Campaign table for ${row.clientId}`}</p>);
+    const html = renderToStaticMarkup(<CreatorOverviewTable rows={[base, another]} {...collapsed}
+      expanded={new Set([another.clientId])} renderExpanded={renderExpanded} />);
+    expect(renderExpanded).toHaveBeenCalledTimes(1);
+    expect(renderExpanded).toHaveBeenCalledWith(another);
+    expect(html).toMatch(/aria-expanded="true" aria-controls="([^"]+-campaigns-another)"/);
+    const id = html.match(/aria-controls="([^"]+)"/)?.[1];
+    expect(html).toContain(`id="${id}"`);
+    expect(html).toContain('colSpan="14"');
+    expect(html).toContain("Campaign table for another");
+    expect(html).not.toContain("Campaign table for creator-1");
+    expect(html).toContain("[width:100cqi]");
   });
 });

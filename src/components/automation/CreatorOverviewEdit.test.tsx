@@ -99,6 +99,9 @@ describe("creator overview edit scope", () => {
     expect(html).toContain("×");
     expect(html).toContain("7.30×");
     expect(html).toContain("กลับไปรายการ");
+    expect(html).toContain('data-layout="campaign-settings-grid"');
+    expect(html).toContain('data-layout="compact-auto-row"');
+    expect(html).not.toContain("ใช้ถึง 80% → เพิ่มงบ 20%");
     expect(html).not.toContain('role="tab');
     expect(html).not.toContain("ตรวจ ROI");
     expect(html).toContain("Sync บัญชีนี้ก่อนแก้งบ");

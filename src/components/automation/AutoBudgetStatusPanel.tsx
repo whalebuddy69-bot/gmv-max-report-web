@@ -1,6 +1,6 @@
-import { useId, useRef, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { Activity } from "lucide-react";
+import { Activity, ChevronDown } from "lucide-react";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
 import { armBudgetAuto, armBudgetAutoContinuous, fetchBudgetAutoOverviewStatus, fetchBudgetAutoStatus, isContinuousBudgetClientId, stopBudgetAuto, stopBudgetAutoContinuous,
   type BudgetAutoArmInput, type BudgetAutoSpendTrendArmInput, type BudgetAutoVerifiedContinuousArmInput, type BudgetAutoStatus,
@@ -170,7 +170,18 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
   </>;
 }
 
-export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, refresh, onChanged, variant = "panel", blockAutoStart = false }: {
+function CompactAutoRow({ titleId, status, controls }: { titleId?: string; status: ReactNode; controls?: ReactNode }) {
+  return <div className="flex min-h-11 items-center justify-between gap-2" data-layout="compact-auto-row">
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1">
+      <h3 id={titleId} className="text-sm font-semibold">Auto budget increase</h3>
+      <div className="text-xs text-muted-foreground">{status}</div>
+    </div>
+    {controls && <div className="flex shrink-0 items-center gap-0.5">{controls}</div>}
+  </div>;
+}
+
+export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, refresh, onChanged, variant = "panel", blockAutoStart = false,
+  compactTitleId, compactDetailsButton, showCompactDetails = false }: {
   data: BudgetAutoStatus;
   campaignId: string | null;
   clientId: BudgetCapClientId;
@@ -179,6 +190,9 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   onChanged?: () => void;
   variant?: "panel" | "campaign-form";
   blockAutoStart?: boolean;
+  compactTitleId?: string;
+  compactDetailsButton?: ReactNode;
+  showCompactDetails?: boolean;
 }) {
   const [duration, setDuration] = useState("30");
   const [draft, setDraft] = useState<AutoDraft | null>(null);
@@ -282,26 +296,23 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   }
 
   if (!compact && !preview && !stopId && !draft && !notice && !pending) return null;
-  return <div className={compact ? "mt-2 space-y-2.5 text-sm" : "mt-3 space-y-2 border-t border-border pt-3 text-sm"}>
+  return <div className={compact ? "space-y-1.5 text-sm" : "mt-3 space-y-2 border-t border-border pt-3 text-sm"}>
     {compact && <>
-      <div className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-border px-3 py-1.5">
-        <div>
-          <p className="font-medium">{switchLabel}</p>
-          {pending && <p role="status" className="text-xs text-muted-foreground">{pending === "stop" ? "กำลังตรวจผลการหยุด…" : "กำลังเปิด Auto…"}</p>}
-        </div>
+      <CompactAutoRow titleId={compactTitleId} status={pending
+        ? <span role="status">{pending === "stop" ? "กำลังตรวจผลการหยุด…" : "กำลังเปิด Auto…"}</span>
+        : <span>{switchLabel}{!switchState && !stopId ? blockAutoStart ? " · มีรายการงบค้าง" : !campaignId ? " · Sync ก่อนเปิด" : "" : ""}</span>} controls={<>
         {switchState !== null ? <button type="button" role="switch" aria-checked={switchState} aria-label="Auto budget increase"
           disabled={pending !== null || needsFreshRead || (switchState ? !stopId : !!stopId || !preview || blockAutoStart || draft !== null || (!continuous && !durationValid))}
           onClick={() => { if (switchState) void stop(); else review(); }}
-          className="group flex h-11 shrink-0 items-center rounded-md px-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50">
-          <span aria-hidden className={cn("relative block h-6 w-11 rounded-full transition-colors", switchState ? "bg-primary" : "bg-muted-foreground/40")}>
-            <span className={cn("absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform", switchState && "translate-x-5")} />
+          className="flex size-11 items-center justify-center rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50">
+          <span aria-hidden className={cn("relative block h-5 w-9 rounded-full transition-colors", switchState ? "bg-primary" : "bg-muted-foreground/40")}>
+            <span className={cn("absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow-sm transition-transform", switchState && "translate-x-4")} />
           </span>
-        </button> : <span aria-hidden className="mr-1 h-6 w-11 shrink-0 rounded-full border border-dashed border-muted-foreground/50" />}
-      </div>
-      {!switchState && blockAutoStart && <p className="text-xs text-muted-foreground">ปิดหรือจัดการรายการงบและเพดานที่ค้างอยู่ก่อนเปิด Auto</p>}
-      {!campaignId && !stopId && <p className="text-xs text-muted-foreground">ต้อง Sync และพบแคมเปญที่เปิดอยู่ก่อนเปิด Auto</p>}
+        </button> : <span aria-hidden className="mx-1 h-5 w-9 rounded-full border border-dashed border-muted-foreground/50" />}
+        {compactDetailsButton}
+      </>} />
       {switchState !== true && stopId && <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null || needsFreshRead} onClick={() => void stop()}>หยุด Auto</Button>}
-      {!draft && preview && !continuous && <label htmlFor={durationId} className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      {showCompactDetails && !draft && preview && !continuous && <label htmlFor={durationId} className="flex flex-wrap items-center gap-2 border-t pt-2 text-xs text-muted-foreground">
         ระยะเวลาเปิด Auto (10–120 นาที)
         <Input id={durationId} type="text" inputMode="numeric" maxLength={3} value={duration} onChange={(event) => setDuration(event.target.value)} className="w-20" disabled={pending !== null || needsFreshRead || blockAutoStart} />
       </label>}
@@ -355,6 +366,8 @@ export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = 
   blockAutoStart?: boolean;
 }) {
   const titleId = useId();
+  const detailsId = useId();
+  const [showDetails, setShowDetails] = useState(false);
   const queryClient = useQueryClient();
   const compact = variant === "campaign-form";
   // The scoped ledger summary already exposes a verified Stop action. Do not
@@ -371,27 +384,42 @@ export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = 
     refetchIntervalInBackground: false,
   });
   if (!compact && statusUnavailable(query.error)) return null;
-  return <section className={cn("min-w-0 rounded-lg border border-border bg-card p-3.5 sm:p-4", !compact && "mt-3")} aria-labelledby={titleId}>
-    <h3 id={titleId} className="flex items-center gap-2 text-base font-semibold"><Activity className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />{compact ? "Auto budget increase" : "เพิ่มงบอัตโนมัติ"}</h3>
+  const pendingText = query.isPending ? "กำลังตรวจสถานะ Auto…" : "ยังอ่านสถานะ Auto ไม่ได้";
+  const detailsButton = <Button type="button" size="icon" variant="ghost" className="size-11" aria-label="ดูสถานะและเหตุผลของ Auto"
+    aria-expanded={showDetails} aria-controls={detailsId} onClick={() => setShowDetails((open) => !open)}>
+    <ChevronDown className={cn("size-4 transition-transform", showDetails && "rotate-180")} aria-hidden />
+  </Button>;
+  const controls = query.isSuccess && <AutoBudgetControls key={`${userId}:${clientId}:${campaignId ?? "none"}`} data={query.data} clientId={clientId}
+    campaignId={campaignId} dataUpdatedAt={query.dataUpdatedAt} refresh={query.refetch} variant={variant} blockAutoStart={blockAutoStart}
+    compactTitleId={titleId} compactDetailsButton={compact ? detailsButton : undefined} showCompactDetails={showDetails}
+    onChanged={() => {
+      // In summary mode the current query and overview are the same; the control's immediate refresh is enough.
+      if (!readCompactSummary) void invalidateOtherAutoBudgetViews(queryClient, userId, clientId, campaignId);
+    }} />;
+  if (compact) return <section className="min-w-0 rounded-lg border border-border bg-card px-3 sm:px-4" aria-labelledby={titleId}>
+    {controls || <CompactAutoRow titleId={titleId} status={<span role="status">{pendingText}</span>} controls={detailsButton} />}
+    <div id={detailsId} hidden={!showDetails} className="space-y-1.5 border-t border-border py-2 text-xs text-muted-foreground">
+      {showDetails && <>
+        <p>ใช้ถึง 80% → เพิ่มงบ 20% เมื่อผ่านเพดานและเงื่อนไขความปลอดภัย</p>
+        <p>ยอดใช้จากรายงานอาจล่าช้า และไม่ได้ยืนยันว่ากำลังไลฟ์อยู่</p>
+        {blockAutoStart && <p>จัดการรายการงบหรือเพดานที่ค้างก่อนเปิด Auto</p>}
+        {readCompactSummary ? <p>ต้อง Sync และพบแคมเปญที่เปิดอยู่ก่อนเปิด Auto</p>
+          : query.isSuccess && <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />}
+      </>}
+    </div>
+  </section>;
+
+  return <section className="mt-3 min-w-0 rounded-lg border border-border bg-card p-3.5 sm:p-4" aria-labelledby={titleId}>
+    <h3 id={titleId} className="flex items-center gap-2 text-base font-semibold"><Activity className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />เพิ่มงบอัตโนมัติ</h3>
     <p className="mt-1 text-sm text-muted-foreground">ใช้ถึง 80% → เพิ่มงบ 20% เมื่อผ่านเพดานและเงื่อนไขความปลอดภัย</p>
-    {!compact && <p className="mt-1 text-xs text-muted-foreground">ยอดใช้จากรายงาน TikTok อาจล่าช้า และการอ่านรายงานสำเร็จไม่ยืนยันว่ากำลังไลฟ์อยู่</p>}
+    <p className="mt-1 text-xs text-muted-foreground">ยอดใช้จากรายงาน TikTok อาจล่าช้า และการอ่านรายงานสำเร็จไม่ยืนยันว่ากำลังไลฟ์อยู่</p>
     {query.isSuccess
       ? <>
-        {!compact && <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />}
-        <AutoBudgetControls key={`${userId}:${clientId}:${campaignId ?? "none"}`} data={query.data} clientId={clientId} campaignId={campaignId} dataUpdatedAt={query.dataUpdatedAt} refresh={query.refetch}
-          variant={variant} blockAutoStart={blockAutoStart} onChanged={() => {
-            // In summary mode the current query and overview are the same; the
-            // control's immediate refresh is enough for both observers.
-            if (!readCompactSummary) void invalidateOtherAutoBudgetViews(queryClient, userId, clientId, campaignId);
-          }} />
-        {compact && <details className="mt-2 text-xs text-muted-foreground">
-          <summary className="min-h-9 w-fit cursor-pointer py-2">ดูสถานะและเหตุผลของ Auto</summary>
-          {readCompactSummary ? <p className="pb-1">Sync บัญชีนี้เพื่อดูผลประเมินและเงื่อนไขเปิด Auto</p>
-            : <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />}
-        </details>}
+        <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />
+        {controls}
       </>
       : <p role="status" className="mt-2 text-xs text-muted-foreground">
-        {query.isPending ? "กำลังตรวจสถานะ Auto…" : "ยังอ่านสถานะ Auto ไม่ได้"}
+        {pendingText}
       </p>}
   </section>;
 }

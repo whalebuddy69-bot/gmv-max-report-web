@@ -30,6 +30,13 @@ type CreatorEditSync = CreatorBinding & Pick<AutomationClient, "reportingDate" |
 
 const percentFormatter = new Intl.NumberFormat("th-TH", { maximumFractionDigits: 2 });
 const formSection = "min-w-0 space-y-2 rounded-lg border border-border bg-card p-3 sm:p-4";
+// Budget controls supply adjacent sections (budget, Auto, ceiling). Keep the
+// two primary fields equal while letting account-level controls span both columns.
+const settingsGrid = "grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 sm:[&>*:nth-child(n+3)]:col-span-2 " +
+  "[&>section:nth-child(-n+2)]:space-y-2 [&>section:nth-child(-n+2)]:p-3 sm:[&>section:nth-child(-n+2)]:p-3 " +
+  "[&>section:nth-child(-n+2)>div:first-child]:min-h-6 sm:[&>section:nth-child(-n+2)>div:first-child]:min-h-9 " +
+  "[&>section:nth-child(-n+2)_form>div:first-of-type]:max-w-none [&>section:nth-child(-n+2)_form>div:first-of-type]:basis-full " +
+  "[&>section:nth-child(-n+2)>div:has(>input)]:max-w-none";
 const scheduleTime = new Intl.DateTimeFormat("en-GB", { timeZone: BANGKOK, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
 function sameBinding(a: CreatorBinding, b: CreatorBinding) {
@@ -108,14 +115,30 @@ export function CreatorEditBudgetMeter({ campaign }: { campaign: AutomationCampa
   </div>;
 }
 
-function ReadOnlyField({ label, value, unit }: { label: string; value: string | null; unit?: string }) {
-  return <label className="block min-w-0 text-sm font-medium">
-    <span>{label}</span>
-    <span className="relative mt-1.5 block">
-      <Input readOnly value={value ?? ""} placeholder="—" className={unit ? "h-11 bg-muted/45 pr-14 text-base sm:text-sm" : "h-11 bg-muted/45 text-base sm:text-sm"} />
-      {unit && <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">{unit}</span>}
-    </span>
-  </label>;
+type ReadOnlyValue = { value: string | null; unit?: string };
+
+function ReadOnlyInput({ id, value, unit }: ReadOnlyValue & { id: string }) {
+  return <div className="relative min-w-0">
+    <Input id={id} readOnly value={value ?? ""} placeholder="—" className={cn("h-11 bg-muted/30 text-base tabular-nums sm:text-sm", unit && "pr-14")} />
+    {unit && <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">{unit}</span>}
+  </div>;
+}
+
+function ReadOnlyField({ label, ...field }: ReadOnlyValue & { label: string }) {
+  const id = useId();
+  return <div className="min-w-0 space-y-1">
+    <label htmlFor={id} className="block text-sm font-medium">{label}</label>
+    <ReadOnlyInput id={id} {...field} />
+  </div>;
+}
+
+function ReadOnlySetting({ label, children, ...field }: ReadOnlyValue & { label: string; children?: ReactNode }) {
+  const id = useId();
+  return <section className={formSection} aria-label={label}>
+    <div className="flex items-center"><h3 className="text-base font-semibold"><label htmlFor={id}>{label}</label></h3></div>
+    <ReadOnlyInput id={id} {...field} />
+    {children}
+  </section>;
 }
 
 function formatSchedule(value: string | null | undefined) {
@@ -151,9 +174,9 @@ export function CreatorCampaignSchedule({ campaign, embedded = false }: {
 
 function CreatorAutoDiagnostics({ userId }: { userId: number }) {
   const [open, setOpen] = useState(false);
-  return <details onToggle={(event) => setOpen(event.currentTarget.open)} className="rounded-md border border-border px-3 py-1">
-    <summary className="min-h-10 cursor-pointer py-2.5 text-sm font-medium">ประวัติการทำงานและการแจ้ง LINE</summary>
-    {open && <div className="pb-2"><AutoDiagnosticsPanel userId={userId} /></div>}
+  return <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary className="min-h-10 cursor-pointer px-3 py-2.5 text-sm font-medium sm:px-4">ประวัติการทำงานและการแจ้ง LINE</summary>
+    {open && <div className="px-3 pb-2 sm:px-4"><AutoDiagnosticsPanel userId={userId} /></div>}
   </details>;
 }
 
@@ -171,12 +194,8 @@ type CreatorEditPanelProps = {
 function CreatorEditAutoSettings({ clientId, userId, campaignId, blockAutoStart }: {
   clientId: BudgetCapClientId; userId: number; campaignId: string | null; blockAutoStart: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  return <details className="rounded-lg border border-border bg-card px-3 sm:px-4" onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary className="min-h-10 cursor-pointer py-2.5 text-sm font-medium">Auto budget increase</summary>
-    {open && <div className="pb-3"><AutoBudgetStatusPanel variant="campaign-form" clientId={clientId} userId={userId}
-      campaignId={campaignId} blockAutoStart={blockAutoStart} /></div>}
-  </details>;
+  return <AutoBudgetStatusPanel variant="campaign-form" clientId={clientId} userId={userId}
+    campaignId={campaignId} blockAutoStart={blockAutoStart} />;
 }
 
 function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onBack, onRefreshCampaign, onSync }: CreatorEditPanelProps) {
@@ -233,7 +252,7 @@ function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onB
           <p className="break-words text-sm font-medium">{settings.campaignName}</p>
           <p className="break-all text-xs text-muted-foreground">Campaign ID: {campaign.campaignId} · {statusText}</p>
         </div>
-        <dl className="min-w-24">
+        <dl className="min-w-24 rounded-md bg-muted/45 px-2.5 py-1.5">
           <dt className="text-xs text-muted-foreground">ROI จริงวันนี้</dt>
           <dd className="font-semibold tabular-nums">{roiText}</dd>
         </dl>
@@ -245,31 +264,32 @@ function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onB
               : sync ? "ข้อมูลหมดอายุหรือแคมเปญเปลี่ยน กรุณา Sync ใหม่" : "Sync แคมเปญนี้ก่อนแก้ไข"}
       </p>
     </CreatorCampaignFormSection>
-    <div className="grid gap-2 sm:grid-cols-2 sm:[&>*:nth-child(n+3)]:col-span-2">
+    <div className={settingsGrid} data-layout="campaign-settings-grid">
       {activeCampaign && scope.campaignControl ? <CampaignControlPanel layout="roi-field" selectedCampaignId={campaign.campaignId}
         fallbackRoi={settings.targetRoi ?? null} userId={userId} actionsEnabled={scope.syncCurrent}
-        syncedCampaignId={exactSync?.campaignId} onVerified={onRefreshCampaign} /> : <section className={formSection} aria-label="LIVE ROI Target">
-        <ReadOnlyField label="LIVE ROI Target" unit="×" value={settings.targetRoi == null ? null : formatValue(settings.targetRoi, "ratio")} />
+        syncedCampaignId={exactSync?.campaignId} onVerified={onRefreshCampaign} /> : <ReadOnlySetting label="LIVE ROI Target" unit="×"
+          value={settings.targetRoi == null ? null : formatValue(settings.targetRoi, "ratio")}>
         {activeCampaign && <p className="text-xs text-muted-foreground">บัญชีนี้ยังแก้ ROI Target จากเว็บไม่ได้</p>}
-      </section>}
+      </ReadOnlySetting>}
       {activeCampaign && scope.budgetClientId ? <ManualBudgetPanel variant="campaign-form"
         renderBetweenBudgetAndCeiling={(blockAutoStart) => scope.autoClientId && <CreatorEditAutoSettings clientId={scope.autoClientId}
           userId={userId} campaignId={scope.autoCampaignId} blockAutoStart={blockAutoStart} />}
-        userId={userId} clientId={scope.budgetClientId} active={scope.syncCurrent} clients={[client]} onRefreshCampaign={onRefreshCampaign} /> : <section className={formSection} aria-label="Daily budget">
-        <ReadOnlyField label="Daily budget" unit="THB" value={settings.dailyBudgetMinor == null ? null : formatValue(settings.dailyBudgetMinor / 100, "decimal")} />
-      </section>}
+        userId={userId} clientId={scope.budgetClientId} active={scope.syncCurrent} clients={[client]} onRefreshCampaign={onRefreshCampaign} /> : <ReadOnlySetting label="Daily budget" unit="THB"
+          value={settings.dailyBudgetMinor == null ? null : formatValue(settings.dailyBudgetMinor / 100, "decimal")} />}
     </div>
     {activeCampaign && !scope.budgetClientId && scope.autoClientId && <CreatorEditAutoSettings clientId={scope.autoClientId}
       userId={userId} campaignId={scope.autoCampaignId} blockAutoStart={false} />}
-    <details className="rounded-lg border border-border bg-card">
-      <summary className="min-h-10 cursor-pointer px-3 py-2.5 text-sm font-medium sm:px-4">Schedule และชื่อแคมเปญ <span className="text-xs font-normal text-muted-foreground">· เวลาไทย · อ่านอย่างเดียว</span></summary>
-      <CreatorCampaignSchedule campaign={settings} embedded />
-    </details>
-    {activeCampaign && <details className="rounded-md border border-border bg-card px-3">
-      <summary className="min-h-10 cursor-pointer py-2.5 text-sm font-medium">ดูสัดส่วนงบที่ใช้วันนี้</summary>
-      <div className="pb-2"><CreatorEditBudgetMeter campaign={activeCampaign} /></div>
-    </details>}
-    {activeCampaign && scope.autoClientId === PILOT_BUDGET_CLIENT_ID && <CreatorAutoDiagnostics userId={userId} />}
+    <div className="divide-y divide-border rounded-lg border border-border bg-card">
+      <details>
+        <summary className="min-h-10 cursor-pointer px-3 py-2.5 text-sm font-medium sm:px-4">Schedule และชื่อแคมเปญ <span className="text-xs font-normal text-muted-foreground">· เวลาไทย · อ่านอย่างเดียว</span></summary>
+        <CreatorCampaignSchedule campaign={settings} embedded />
+      </details>
+      {activeCampaign && <details>
+        <summary className="min-h-10 cursor-pointer px-3 py-2.5 text-sm font-medium sm:px-4">ดูสัดส่วนงบที่ใช้วันนี้</summary>
+        <div className="px-3 pb-2 sm:px-4"><CreatorEditBudgetMeter campaign={activeCampaign} /></div>
+      </details>}
+      {activeCampaign && scope.autoClientId === PILOT_BUDGET_CLIENT_ID && <CreatorAutoDiagnostics userId={userId} />}
+    </div>
   </div>;
 }
 

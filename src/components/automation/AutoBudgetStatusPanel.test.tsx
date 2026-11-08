@@ -1,9 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
 import { armBudgetAuto, armBudgetAutoContinuous, armPpanBudgetAutoContinuous, ASHOP_CAP_CLIENT_ID, budgetAutoStatusSchema, fetchBudgetAutoStatus, NNSHOP_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, stopBudgetAuto, stopBudgetAutoContinuous, stopPpanBudgetAutoContinuous, type BudgetAutoStatus } from "@/api/automationBudget";
 import { http } from "@/api/client";
-import { AutoBudgetControls, AutoBudgetStatusBody, autoFormSwitchState, getAutoArmPreview } from "./AutoBudgetStatusPanel";
+import { AutoBudgetControls, AutoBudgetStatusBody, AutoBudgetStatusPanel, autoFormSwitchState, getAutoArmPreview } from "./AutoBudgetStatusPanel";
 
 const observedAt = "2026-03-06T01:00:00.000Z";
 const now = Date.parse(observedAt) + 2_000;
@@ -132,6 +133,26 @@ describe("read-only Auto budget panel", () => {
 });
 
 describe("Ppan continuous Auto", () => {
+  it("keeps Auto in a single compact row by default, without hiding an authorized emergency stop", () => {
+    const queryClient = new QueryClient();
+    const post = vi.spyOn(http, "post");
+    queryClient.setQueryData(["automation", "budget-auto-overview", 7, PILOT_BUDGET_CLIENT_ID], {
+      ...spendTrend, canArm: false, canStop: true, preview: null, overviewState: "on",
+      continuousSession: { sessionId, status: "ARMED", startedAt: observedAt },
+    } satisfies BudgetAutoStatus);
+    const html = renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <AutoBudgetStatusPanel userId={7} clientId={PILOT_BUDGET_CLIENT_ID} campaignId={null} variant="campaign-form" />
+    </QueryClientProvider>);
+    expect(html).toContain('data-layout="compact-auto-row"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toMatch(/<button[^>]*role="switch"[^>]*aria-checked="true"[^>]*>/);
+    expect(html.match(/<button[^>]*role="switch"[^>]*>/)?.[0]).not.toContain(' disabled=""');
+    expect(html).not.toContain("ใช้ถึง 80%");
+    expect(html).not.toContain("ยืนยันเปิด Auto ต่อเนื่อง ใช้เงินจริง");
+    expect(post).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
   it("shows the scoped Auto switch and never treats an available preview as an armed session", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const post = vi.spyOn(http, "post");
