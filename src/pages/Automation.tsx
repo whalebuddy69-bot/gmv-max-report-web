@@ -31,7 +31,7 @@ export function AutomationPage() {
   const data = !automationAccessDenied(overview.error) ? overview.data ?? null : null;
   const now = Date.now();
   async function syncOverview() {
-    const refreshed = await overview.refetch();
+    const refreshed = await overview.refetch({ cancelRefetch: false });
     return refreshed.isSuccess ? refreshed.data ?? null : null;
   }
 

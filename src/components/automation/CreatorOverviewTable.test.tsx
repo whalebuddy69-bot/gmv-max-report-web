@@ -78,6 +78,12 @@ describe("Creator overview table", () => {
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain("Edit");
     expect(html).toContain("Live หมายถึงแคมเปญเปิดอยู่ ไม่ได้ยืนยันว่าห้องกำลัง LIVE");
+    const topHeader = html.split("<thead>")[1]?.split("</tr>")[0] ?? "";
+    expect(topHeader.indexOf('aria-label="TikTok account:')).toBeLessThan(topHeader.indexOf('aria-label="Status:'));
+    expect(topHeader.indexOf('aria-label="Status:')).toBeLessThan(topHeader.indexOf('scope="colgroup"'));
+    expect(topHeader.match(/rowspan="2"/g)).toHaveLength(2);
+    expect(topHeader).toMatch(/scope="colgroup" colSpan="6"[^>]*>Setup</);
+    expect(html.match(/sticky left-\[var\(--overview-account-width\)\]/g)).toHaveLength(2);
     expect(html.indexOf('aria-label="Status:')).toBeLessThan(html.indexOf('aria-label="Schedule time:'));
     expect(html).toContain("TikTok account และ Status แสดงเสมอ");
     expect(html.match(/type="checkbox"/g)).toHaveLength(12);
@@ -94,7 +100,7 @@ describe("Creator overview table", () => {
       "scheduleTime", "autoBudget", "totalBudgetMinor", "maxBudgetMinor", "viewerBoostBudgetMinor", "roiTarget", "gmvMinor",
       "skuOrders", "costPerOrderMinor", "liveViews", "costPerLiveViewMinor",
     ])} sort={{ key: "costMinor", direction: "descending" }} {...collapsed} onSort={() => {}} />);
-    expect(onlyCost.match(/scope="colgroup"/g)).toHaveLength(2);
+    expect(onlyCost.match(/scope="colgroup"/g)).toHaveLength(1);
     expect(onlyCost).toContain('colSpan="1"');
     expect(onlyCost).toContain('aria-sort="descending"');
     expect(onlyCost).toContain('aria-label="Cost: เรียงน้อยไปมาก (ASC)"');
@@ -106,8 +112,8 @@ describe("Creator overview table", () => {
       "scheduleTime", "autoBudget", "totalBudgetMinor", "maxBudgetMinor", "viewerBoostBudgetMinor", "roiTarget", "costMinor", "gmvMinor",
       "skuOrders", "costPerOrderMinor", "liveViews", "costPerLiveViewMinor",
     ])} sort={{ key: "displayName", direction: "ascending" }} {...collapsed} onSort={() => {}} />);
-    expect(onlyAccount.match(/scope="colgroup"/g)).toHaveLength(1);
-    expect(onlyAccount).toContain('rowspan="2"');
+    expect(onlyAccount).not.toContain('scope="colgroup"');
+    expect(onlyAccount).not.toContain('rowspan="2"');
     expect(onlyAccount).toContain('aria-label="ขยายแคมเปญของ Creator 1"');
     expect(onlyAccount).toContain('aria-label="Status:');
   });

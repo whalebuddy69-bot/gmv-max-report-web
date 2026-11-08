@@ -1,11 +1,12 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, CalendarDays, RefreshCw } from "lucide-react";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft, CalendarDays } from "lucide-react";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationCampaign, type AutomationClient, type AutomationOverview } from "@/api/automation";
 import { isBudgetCapClientId, type BudgetCapClientId } from "@/api/automationBudget";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { BANGKOK, isFreshAutomationClient } from "@/lib/automation";
+import { BANGKOK, bangkokDay, isFreshAutomationClient } from "@/lib/automation";
 import { formatValue } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { AutoBudgetStatusPanel } from "./AutoBudgetStatusPanel";
@@ -43,7 +44,7 @@ function sameBinding(a: CreatorBinding, b: CreatorBinding) {
   return a.clientId === b.clientId && a.advertiserId === b.advertiserId && a.tiktokAccountId === b.tiktokAccountId;
 }
 
-/** Bind the explicit Sync to this identity, not simply to an earlier request. */
+/** Bind the fresh read to this identity, not simply to an earlier request. */
 export function getCreatorEditSync(overview: AutomationOverview | null, selected: AutomationClient, now: number): CreatorEditSync | null {
   const current = overview?.clients.find((candidate) => sameBinding(candidate, selected));
   if (!current || !isFreshAutomationClient(current, now)) return null;
@@ -85,6 +86,13 @@ export function findEditableCreatorCampaign(client: AutomationClient, selected: 
 
 function notPastScheduleEnd(value: string | null | undefined, now: number) {
   return value == null || Date.parse(value) > now;
+}
+
+export function resolveCreatorEditSnapshot(overview: AutomationOverview | null, client: AutomationClient, selection: CreatorEditCampaign, now: number) {
+  const match = overview?.clients.find((entry) => sameBinding(entry, client));
+  if (!match || !findEditableCreatorCampaign(match, selection, now)) return null;
+  const proof = getCreatorEditSync(overview, client, now);
+  return proof?.campaignId === selection.campaignId ? { client: match, proof } : null;
 }
 
 export function CreatorCampaignFormSection({ title, tag, className, children }: { title: string; tag?: string; className?: string; children: ReactNode }) {
@@ -199,52 +207,40 @@ function CreatorEditAutoSettings({ clientId, userId, campaignId, blockAutoStart 
 }
 
 function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onBack, onRefreshCampaign, onSync }: CreatorEditPanelProps) {
-  const [sync, setSync] = useState<CreatorEditSync | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [syncFailed, setSyncFailed] = useState(false);
   const [clock, setClock] = useState<number | null>(null);
-  const syncLock = useRef(false);
-  const currentTime = Math.max(now, clock ?? now);
-  const activeCampaign = findEditableCreatorCampaign(client, campaign, currentTime);
-  const exactSync = activeCampaign && sync?.campaignId === campaign.campaignId ? sync : null;
-  const scope = creatorEditControlScope(client, exactSync, currentTime);
+  const time = Math.max(now, clock ?? now);
+  const maySync = campaign.operationStatus === "ENABLE" && notPastScheduleEnd(campaign.scheduleEndAt, time);
+  const autoSync = useQuery({
+    queryKey: ["automation", "edit-snapshot", userId, client.clientId, client.advertiserId, client.tiktokAccountId, campaign.campaignId, bangkokDay(time)],
+    queryFn: async () => resolveCreatorEditSnapshot(await onSync(), client, campaign, Date.now()),
+    enabled: maySync,
+    staleTime: 0, gcTime: 0, retry: false, refetchOnMount: "always",
+    refetchInterval: (query) => query.state.data ? 90_000 : 30_000,
+  });
+  const currentTime = Math.max(time, autoSync.dataUpdatedAt);
+  const latest = maySync && autoSync.isSuccess ? autoSync.data : null;
+  // Use the freshest exact snapshot without ignoring a newer overview that says
+  // this account/campaign is no longer available.
+  const readAt = Date.parse(client.observedAt ?? "");
+  const syncAt = Date.parse(latest?.client.observedAt ?? "");
+  const resolvedClient = latest && client.access === "verified" && syncAt > readAt ? latest.client : client;
+  const activeCampaign = findEditableCreatorCampaign(resolvedClient, campaign, currentTime);
+  const exactSync = activeCampaign ? latest?.proof ?? null : null;
+  const scope = creatorEditControlScope(resolvedClient, exactSync, currentTime);
   const settings = activeCampaign ?? campaign;
   const roiText = actualRoi !== null && Number.isFinite(actualRoi) && actualRoi >= 0 ? `${formatValue(actualRoi, "ratio")}×` : "—";
-  const maySync = campaign.operationStatus === "ENABLE" && notPastScheduleEnd(campaign.scheduleEndAt, currentTime);
   const statusText = campaign.operationStatus === "ENABLE" ? maySync ? "เปิด" : "จบแล้ว" : campaign.operationStatus === "DISABLE" ? "ปิด" : "ลบแล้ว";
 
   useEffect(() => {
-    if (!sync) return;
+    if (!maySync) return;
     setClock(Date.now());
-    const timer = window.setInterval(() => setClock(Date.now()), 1_000);
+    const timer = window.setInterval(() => setClock(Date.now()), 5_000);
     return () => window.clearInterval(timer);
-  }, [sync]);
-
-  async function syncSelected() {
-    if (syncLock.current || !maySync) return;
-    syncLock.current = true;
-    setSync(null);
-    setSyncFailed(false);
-    setSyncing(true);
-    try {
-      const latest = getCreatorEditSync(await onSync(), client, Date.now());
-      const matches = latest?.campaignId === campaign.campaignId;
-      setSync(matches ? latest : null);
-      setSyncFailed(!matches);
-    } catch {
-      setSyncFailed(true);
-    } finally {
-      syncLock.current = false;
-      setSyncing(false);
-    }
-  }
+  }, [maySync]);
 
   return <div className="space-y-2">
-    <div className="flex flex-wrap items-center justify-between gap-1">
+    <div className="flex flex-wrap items-center gap-1">
       <Button type="button" variant="ghost" size="sm" onClick={onBack} className="min-h-10 px-2"><ArrowLeft className="size-4" aria-hidden />กลับไปรายการ</Button>
-      {maySync && <Button type="button" size="sm" variant="outline" className="min-h-10 shrink-0" disabled={syncing} onClick={() => void syncSelected()}>
-        <RefreshCw className={`size-3.5 ${syncing ? "animate-spin" : ""}`} aria-hidden /> {syncing ? "กำลัง Sync…" : "Sync แคมเปญนี้"}
-      </Button>}
     </div>
     <CreatorCampaignFormSection title="ตั้งค่าแคมเปญ" tag="แก้ไข">
       <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2">
@@ -259,9 +255,9 @@ function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onB
       </div>
       <p role="status" className="text-xs text-muted-foreground">
         {!maySync ? "อ่านอย่างเดียว · การเปิดแคมเปญเดิมอยู่ในหน้ารายการ"
-          : scope.syncCurrent ? "ยืนยันแคมเปญแล้ว · ยังไม่ได้บันทึกการเปลี่ยนแปลง"
-            : syncing ? "กำลังอ่านข้อมูลล่าสุดจาก TikTok…" : syncFailed ? "ยังยืนยันว่าแคมเปญนี้เปิดอยู่ไม่ได้"
-              : sync ? "ข้อมูลหมดอายุหรือแคมเปญเปลี่ยน กรุณา Sync ใหม่" : "Sync แคมเปญนี้ก่อนแก้ไข"}
+          : scope.syncCurrent ? "ข้อมูลล่าสุดพร้อมแล้ว"
+            : autoSync.isFetching || autoSync.isPending ? "กำลังอ่านข้อมูลล่าสุดจาก TikTok…"
+              : "ยังยืนยันแคมเปญล่าสุดไม่ได้ · ระบบจะลองอ่านใหม่อัตโนมัติ"}
       </p>
     </CreatorCampaignFormSection>
     <div className={settingsGrid} data-layout="campaign-settings-grid">
@@ -274,7 +270,7 @@ function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onB
       {activeCampaign && scope.budgetClientId ? <ManualBudgetPanel variant="campaign-form"
         renderBetweenBudgetAndCeiling={(blockAutoStart) => scope.autoClientId && <CreatorEditAutoSettings clientId={scope.autoClientId}
           userId={userId} campaignId={scope.autoCampaignId} blockAutoStart={blockAutoStart} />}
-        userId={userId} clientId={scope.budgetClientId} active={scope.syncCurrent} clients={[client]} onRefreshCampaign={onRefreshCampaign} /> : <ReadOnlySetting label="Daily budget" unit="THB"
+        userId={userId} clientId={scope.budgetClientId} active={scope.syncCurrent} clients={[resolvedClient]} onRefreshCampaign={onRefreshCampaign} /> : <ReadOnlySetting label="Daily budget" unit="THB"
           value={settings.dailyBudgetMinor == null ? null : formatValue(settings.dailyBudgetMinor / 100, "decimal")} />}
     </div>
     {activeCampaign && !scope.budgetClientId && scope.autoClientId && <CreatorEditAutoSettings clientId={scope.autoClientId}

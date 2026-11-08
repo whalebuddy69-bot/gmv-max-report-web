@@ -115,9 +115,11 @@ describe("manual budget UI guardrails", () => {
     expect(html.indexOf("Daily budget")).toBeLessThan(html.indexOf("Auto budget slot"));
     expect(html.indexOf("Auto budget slot")).toBeLessThan(html.indexOf("Daily Ceiling"));
     expect(html).toContain('value="1,245.20"');
-    expect(html).toContain('value="9,000.00"');
-    expect(html).toContain("Sync บัญชีนี้ก่อนแก้งบ");
-    expect(html.match(/readonly=""/g)).toHaveLength(2);
+    expect(html).toContain("฿9,000.00");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("ยังไม่ยืนยันแคมเปญล่าสุดสำหรับแก้งบ");
+    expect(html.match(/readonly=""/g)).toHaveLength(1);
+    expect(html).not.toContain("แก้เพดานงบ");
     expect(html).not.toContain("ตรวจงบใหม่");
     expect(slot).toHaveBeenCalledWith(false);
     expect(write).not.toHaveBeenCalled();
@@ -254,6 +256,26 @@ describe("website budget cap", () => {
     expect(denied).not.toContain("ตั้งเพดานงบ</button>");
     const mismatched = renderToStaticMarkup(<BudgetCapEditor {...props} status={editable} />);
     expect(mismatched).not.toContain("แก้เพดานงบ");
+  });
+
+  it("shows a verified ceiling in the compact closed row, without mounting edit controls or exposing stale/foreign amounts", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const props = { active: true, clientId: PILOT_BUDGET_CLIENT_ID, displayName: "Ppan", loading: false,
+      refreshStatus: vi.fn(async () => null), variant: "campaign-form" } as const;
+    const render = (data: AutomationBudgetStatus) => renderToStaticMarkup(<BudgetCapEditor {...props} status={data} />);
+    const visible = render(editable);
+    expect(visible).toContain("Daily Ceiling");
+    expect(visible).toContain("฿4,500.00");
+    expect(visible).toContain('aria-expanded="false"');
+    expect(visible).toContain('hidden=""');
+    expect(visible).not.toMatch(/แก้เพดานงบ|ยืนยันเพดานใหม่|<input/);
+    const stale = render({ ...editable, cap: { ...singleCap, readAt: "2026-01-03T02:00:00.000Z" } });
+    const foreign = render({ ...editable, clientId: SRIHIW_CAP_CLIENT_ID });
+    for (const html of [stale, foreign]) {
+      expect(html).toContain("ยังไม่มีเพดานล่าสุดที่ยืนยันได้");
+      expect(html).not.toContain("฿4,500.00");
+    }
+    expect(props.refreshStatus).not.toHaveBeenCalled();
   });
 
   it("sends only exact cap bodies, never repeats a lost response, and validates Srihiw scope", async () => {

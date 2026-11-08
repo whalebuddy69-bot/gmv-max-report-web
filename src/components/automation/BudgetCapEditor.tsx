@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ComponentProps, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Pencil, RefreshCw } from "lucide-react";
+import { ChevronDown, Pencil, RefreshCw } from "lucide-react";
 import { changeBudgetCap, fetchAdditionalBudgetCapStatus, isAdditionalBudgetCapClientId, type AdditionalBudgetCapClientId, type BudgetCapClientId, type BudgetCapStatus } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -45,14 +45,19 @@ export function BudgetCapEditor({
   const [draft, setDraft] = useState<{ amount: string; review: BudgetCapReview | null } | null>(null);
   const [notice, setNotice] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const busy = useRef(false);
   const inputId = useId();
+  const headingId = useId();
+  const detailsId = useId();
   const known = status?.clientId === clientId ? status : null;
   const cap = known && freshBudgetCap(known, now) ? known.cap : null;
   const canEdit = active && !blocked && canEditBudgetCap(known, clientId, now);
   const canConfirm = canEdit && !!draft?.review && canConfirmBudgetCap(draft.review, known, clientId, now);
   const unset = known && !known.cap && isAdditionalBudgetCapClientId(clientId);
   const compact = variant === "campaign-form";
+  const canUseEditor = !compact || showDetails;
+  const missing = loading ? "กำลังตรวจสิทธิ์และเพดาน…" : unset ? "ยังไม่ได้ตั้งเพดานงบ" : "ยังไม่มีเพดานล่าสุดที่ยืนยันได้";
 
   useEffect(() => {
     if (!active && !compact) return;
@@ -62,7 +67,7 @@ export function BudgetCapEditor({
   }, [active, compact]);
 
   function openDraft() {
-    if (busy.current || !active || blocked || !canEditBudgetCap(known, clientId, Date.now())) return;
+    if (!canUseEditor || busy.current || !active || blocked || !canEditBudgetCap(known, clientId, Date.now())) return;
     setNotice(null);
     setDraft({ amount: variant === "campaign-form" && cap ? formatBudgetBaht(cap.clientDailyCapMinor).slice(1) : "", review: null });
     onEditingChange?.(true);
@@ -77,7 +82,7 @@ export function BudgetCapEditor({
 
   function stage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy.current || !active || blocked || !draft || draft.review || !canEditBudgetCap(known, clientId, Date.now())) return;
+    if (!canUseEditor || busy.current || !active || blocked || !draft || draft.review || !canEditBudgetCap(known, clientId, Date.now())) return;
     const target = parseBudgetBaht(draft.amount);
     if (target === null) {
       setNotice({ kind: "error", message: "กรอกเพดานเป็นบาทมากกว่า 0 และไม่เกิน 2 ตำแหน่งทศนิยม" });
@@ -94,7 +99,7 @@ export function BudgetCapEditor({
 
   async function confirm() {
     const review = draft?.review;
-    if (busy.current || !active || blocked || !review || !canConfirmBudgetCap(review, known, clientId, Date.now())) return;
+    if (!canUseEditor || busy.current || !active || blocked || !review || !canConfirmBudgetCap(review, known, clientId, Date.now())) return;
     const input = { expectedRevision: review.expectedRevision, capMinor: review.capMinor };
     busy.current = true;
     setSubmitting(true);
@@ -117,20 +122,20 @@ export function BudgetCapEditor({
     }
   }
 
-  return (
+  const editor = (
     <div>
-      {compact ? (!draft || !!draft.review) && <div className="space-y-1.5">
-        <label htmlFor={inputId} className="sr-only">Daily Ceiling (THB)</label>
-        <CampaignAmountField id={inputId} readOnly value={cap ? formatBudgetBaht(cap.clientDailyCapMinor).slice(1) : ""} placeholder="—" />
-        {!cap && <p className="text-xs text-muted-foreground">{loading ? "กำลังตรวจสิทธิ์และเพดาน…" : unset ? "ยังไม่ได้ตั้งเพดานงบ" : "ยังไม่มีเพดานล่าสุดที่ยืนยันได้"}</p>}
+      {compact ? <div className="space-y-1.5">
+        <p className="text-xs text-muted-foreground">เพดานคุมงบรวมต่อวันของ Creator นี้ ไม่ใช่งบที่ส่งให้ TikTok</p>
+        {!cap && <p className="text-xs text-muted-foreground">{missing}</p>}
         {cap && cap.clientDailyCapMinor !== cap.campaignCapMinor && <p className="text-xs text-muted-foreground">เพดานต่อแคมเปญ {formatBudgetBaht(cap.campaignCapMinor)} · ต่างจากเพดานรวมต่อวัน</p>}
+        {cap && <p className="text-xs text-muted-foreground">อ่านล่าสุด {time.format(new Date(cap.readAt))} น. เวลาไทย</p>}
       </div> : cap ? (
         <dl className="grid gap-2 rounded-md border border-border p-3 text-sm sm:grid-cols-2">
           <div><dt className="text-muted-foreground">เพดานต่อแคมเปญ</dt><dd className="font-medium tabular">{formatBudgetBaht(cap.campaignCapMinor)}</dd></div>
           <div><dt className="text-muted-foreground">เพดานรวมวันนี้</dt><dd className="font-medium tabular">{formatBudgetBaht(cap.clientDailyCapMinor)}</dd></div>
           <div className="text-xs text-muted-foreground sm:col-span-2"><dt className="sr-only">เวลาอ่านเพดาน</dt><dd>อ่านล่าสุด {time.format(new Date(cap.readAt))} น. เวลาไทย</dd></div>
         </dl>
-      ) : <p className="text-sm text-muted-foreground">{loading ? "กำลังตรวจสิทธิ์และเพดาน…" : unset ? "ยังไม่ได้ตั้งเพดานงบ" : "ยังไม่มีเพดานล่าสุดที่ยืนยันได้"}</p>}
+      ) : <p className="text-sm text-muted-foreground">{missing}</p>}
       {known?.capEditAllowed === true && !draft && (
         <Button type="button" variant="outline" className="mt-3 min-h-10" disabled={!canEdit || submitting} onClick={openDraft}>
           <Pencil className="h-4 w-4" aria-hidden />{unset ? "ตั้งเพดานงบ" : "แก้เพดานงบ"}
@@ -153,7 +158,7 @@ export function BudgetCapEditor({
           </div>
         </div>
       ) : draft ? (
-        <form onSubmit={stage} className={compact ? "space-y-2" : "mt-3 space-y-2 rounded-md border border-border p-3"}>
+        <form onSubmit={stage} className={compact ? "mt-2.5 space-y-2" : "mt-3 space-y-2 rounded-md border border-border p-3"}>
           <label htmlFor={inputId} className="block text-sm font-medium">เพดานใหม่ของ {displayName} (บาท)</label>
           {compact ? <CampaignAmountField id={inputId} autoComplete="off" maxLength={25} placeholder="เช่น 30,000" value={draft.amount} disabled={!canEdit}
             onChange={(event) => setDraft({ amount: event.target.value, review: null })} />
@@ -168,6 +173,22 @@ export function BudgetCapEditor({
       {notice && <p role={notice.kind === "success" ? "status" : "alert"} className={`mt-3 text-sm${notice.kind === "error" ? " text-destructive" : ""}`}>{notice.message}</p>}
     </div>
   );
+
+  if (!compact) return editor;
+  return <section className="min-w-0 rounded-lg border border-border bg-card px-3 sm:px-4" aria-labelledby={headingId}>
+    <button type="button" className="flex min-h-11 w-full min-w-0 items-center justify-between gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait"
+      aria-expanded={showDetails} aria-controls={detailsId} disabled={submitting} onClick={() => setShowDetails((open) => !open)}>
+      <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1">
+        <span id={headingId} className="text-sm font-semibold">Daily Ceiling</span>
+        <span className="text-xs tabular-nums text-muted-foreground" title={cap ? undefined : missing}>{cap ? formatBudgetBaht(cap.clientDailyCapMinor) : "—"}</span>
+        {draft && !showDetails && <span className="text-xs text-muted-foreground">มีแบบร่าง</span>}
+      </span>
+      <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none", showDetails && "rotate-180")} aria-hidden />
+    </button>
+    <div id={detailsId} hidden={!showDetails} className="border-t border-border pb-3 pt-2.5">
+      {showDetails && editor}
+    </div>
+  </section>;
 }
 
 export function AdditionalBudgetCapPanel({ active, userId, clientId, displayName, blocked, onEditingChange, refreshBudgetStatus, variant }: {

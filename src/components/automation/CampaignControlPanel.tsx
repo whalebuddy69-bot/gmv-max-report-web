@@ -56,10 +56,10 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
   const isRecovery = layout === "recovery";
   const isTargeted = isRoiField || isLifecycle;
   const canReadDetails = !isRecovery && (isLifecycle ? actionsEnabled && selectedCampaignId !== undefined && lifecycleAction !== undefined
-    : !isRoiField || (actionsEnabled && selectedCampaignId !== undefined && syncedCampaignId === selectedCampaignId));
+    : !isRoiField || selectedCampaignId !== undefined);
   const [action, setAction] = useState<CampaignControlAction | null>(null);
   const [target, setTarget] = useState("");
-  const [roiDraft, setRoiDraft] = useState<{ campaignId: string; value: string } | null>(null);
+  const [roiDraft, setRoiDraft] = useState<{ campaignId: string; baselineRoiTenths: number; value: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [preview, setPreview] = useState<CampaignActionPreview | null>(null);
   const [pending, setPending] = useState(false);
@@ -90,10 +90,13 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
     campaign?.operationStatus === (lifecycleAction === "PAUSE" ? "ENABLE" : "DISABLE")
     : syncedCampaignId === undefined || (syncedCampaignId === null ? campaign?.operationStatus === "DISABLE" : campaign?.campaignId === syncedCampaignId);
   const canReview = actionsEnabled && matchedSync && !pendingId && !pending;
-  const exactActiveCampaign = campaign?.operationStatus === "ENABLE" && campaign.campaignId === selectedCampaignId && campaign.campaignId === syncedCampaignId ? campaign : null;
+  const campaignAge = campaign ? Date.now() - Date.parse(campaign.observedAt) : Infinity;
+  const currentRoiCampaign = campaign?.operationStatus === "ENABLE" && campaign.campaignId === selectedCampaignId && campaignAge >= -5_000 && campaignAge <= 45_000 ? campaign : null;
+  const exactActiveCampaign = currentRoiCampaign && currentRoiCampaign.campaignId === syncedCampaignId ? currentRoiCampaign : null;
   const canReviewRoiField = canReview && exactActiveCampaign !== null && supports("SET_ROI") === true && (roiMode === "live" || roiMode === "dry-run");
-  const exactRoiDraft = exactActiveCampaign && roiDraft?.campaignId === exactActiveCampaign.campaignId ? roiDraft.value : null;
-  const existingRoiValue = exactActiveCampaign ? String(exactActiveCampaign.roiTargetTenths / 10)
+  const exactRoiDraft = exactActiveCampaign && roiDraft?.campaignId === exactActiveCampaign.campaignId && roiDraft.baselineRoiTenths === exactActiveCampaign.roiTargetTenths ? roiDraft.value : null;
+  const baselineChanged = roiDraft !== null && currentRoiCampaign?.campaignId === roiDraft.campaignId && currentRoiCampaign.roiTargetTenths !== roiDraft.baselineRoiTenths;
+  const existingRoiValue = currentRoiCampaign ? String(currentRoiCampaign.roiTargetTenths / 10)
     : fallbackRoi !== null && Number.isFinite(fallbackRoi) && fallbackRoi >= 0 ? String(fallbackRoi) : "";
   const requestedRoi = exactRoiDraft === null ? null : parseCampaignRoiTenths(exactRoiDraft);
   const canConfirm = (value: CampaignActionPreview) => canReview && acknowledged && effectiveMode(value.action) === "live" && supports(value.action) &&
@@ -109,7 +112,7 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
 
   function changeRoiDraft(value: string) {
     if (!canReviewRoiField || !exactActiveCampaign || busy.current) return;
-    setRoiDraft({ campaignId: exactActiveCampaign.campaignId, value });
+    setRoiDraft({ campaignId: exactActiveCampaign.campaignId, baselineRoiTenths: exactActiveCampaign.roiTargetTenths, value });
     setAction(null); setNotice(null); setOutcome(null); setPreview(null); setAcknowledged(false);
   }
 
@@ -120,7 +123,10 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
       (isLifecycle && effectiveMode(nextAction) !== "dry-run" && effectiveMode(nextAction) !== "live") ||
       (isRoiField && nextAction === "SET_ROI" && (!canReviewRoiField || preview?.action === "SET_ROI"))) return;
     const age = Date.now() - Date.parse(campaign.observedAt);
-    if (age < -5_000 || age > 45_000) { setNotice("ข้อมูลหมดอายุ กรุณาอัปเดตสถานะแคมเปญก่อน"); return; }
+    if (age < -5_000 || age > 45_000) {
+      if (isRoiField) void result.refetch({ cancelRefetch: false });
+      setNotice(isRoiField ? "ข้อมูลหมดอายุ กำลังอ่านค่าล่าสุดอีกครั้ง" : "ข้อมูลหมดอายุ กรุณาอัปเดตสถานะแคมเปญก่อน"); return;
+    }
     const requested = nextAction === "SET_ROI" ? (isRoiField ? requestedRoi : parseCampaignRoiTenths(target)) : null;
     if (nextAction === "SET_ROI" && (requested === null || requested === campaign.roiTargetTenths)) {
       setNotice("กรอก ROI Target ใหม่ 0.1–999.9 โดยใช้ทศนิยมไม่เกิน 1 ตำแหน่ง"); return;
@@ -132,7 +138,8 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
       if (next.mode !== effectiveMode(nextAction)) { setNotice("สิทธิ์เปลี่ยนระหว่างเตรียมรายการ กรุณาอัปเดตสถานะก่อน"); return; }
       setPreview(next); setAction(null);
     } catch (error) {
-      setNotice(error instanceof ApiError && error.status === 409 ? "แคมเปญหรือสิทธิ์เปลี่ยนระหว่างตรวจ กรุณาอัปเดตสถานะก่อน"
+      if (isRoiField) void result.refetch({ cancelRefetch: false });
+      setNotice(error instanceof ApiError && error.status === 409 ? isRoiField ? "ข้อมูลเปลี่ยนระหว่างทำรายการ กำลังอ่านค่าล่าสุดอีกครั้ง" : "แคมเปญหรือสิทธิ์เปลี่ยนระหว่างตรวจ กรุณาอัปเดตสถานะก่อน"
         : "ยังตรวจรายการไม่ได้ ไม่มีคำสั่งแก้ไขถูกส่งไป TikTok");
     } finally { busy.current = false; setPending(false); }
   }
@@ -250,7 +257,6 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
       <h3 id={heading} className="text-base font-semibold"><label htmlFor={input}>LIVE ROI Target</label></h3>
       <div className="flex items-center gap-2">
         {roiMode === "dry-run" && <Badge variant="outline">โหมดทดลอง · ไม่บันทึกจริง</Badge>}
-        {canReadDetails && !blockedRequest(result.error) && refresh}
       </div>
     </div>
     <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => void review(event, "SET_ROI")}>
@@ -265,17 +271,18 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
         disabled={!canReviewRoiField || requestedRoi === null || requestedRoi === exactActiveCampaign?.roiTargetTenths || preview?.action === "SET_ROI"}>{pending ? "กำลังเตรียม…" : roiMode === "dry-run" ? "ดูตัวอย่าง" : "บันทึก ROI Target"}</Button>}
     </form>
     <p id={description} className="text-xs text-muted-foreground">
-      เป้าหมายยอดขายต่อค่าโฆษณา (เท่า) · {!canReadDetails ? "Sync ก่อนแก้ไข"
-        : result.isPending ? "กำลังอ่านสถานะแคมเปญ…"
+      เป้าหมายยอดขายต่อค่าโฆษณา (เท่า) · {!canReadDetails ? "ยังไม่พบแคมเปญที่เลือก"
+        : result.isPending || !actionsEnabled ? "กำลังยืนยันข้อมูลล่าสุด…"
           : result.isError ? "ยังยืนยันสิทธิ์หรือสถานะแคมเปญไม่ได้"
-            : !matchedSync ? "แคมเปญที่อ่านได้ไม่ตรงกับรอบ Sync"
+            : !matchedSync ? "ข้อมูลล่าสุดไม่ตรงกับแคมเปญที่เลือก"
               : data?.blocker ? reasons.get(data.blocker) ?? "ยังยืนยันเงื่อนไขให้จัดการแคมเปญไม่ได้"
                 : !exactActiveCampaign || !data?.capabilities.setRoi || (roiMode !== "live" && roiMode !== "dry-run") ? "ยังแก้ไขไม่ได้สำหรับแคมเปญนี้"
-                  : exactRoiDraft !== null && requestedRoi === null ? "กรอก 0.1–999.9 โดยใช้ทศนิยมไม่เกิน 1 ตำแหน่ง"
+                  : baselineChanged ? "ROI Target ล่าสุดเปลี่ยนแล้ว กรุณากรอกใหม่"
+                    : exactRoiDraft !== null && requestedRoi === null ? "กรอก 0.1–999.9 โดยใช้ทศนิยมไม่เกิน 1 ตำแหน่ง"
                     : roiMode === "dry-run" ? "ดูตัวอย่างได้ แต่ยังไม่ส่งคำสั่งไป TikTok"
                       : "ตรวจรายละเอียดก่อนยืนยันทุกคำสั่ง"}
     </p>
-    {preview?.action === "SET_ROI" && reviewResult}
+    {preview?.action === "SET_ROI" && <>{reviewResult}<Button type="button" variant="ghost" size="sm" onClick={() => { setPreview(null); setAcknowledged(false); }}>ปิดรายการ</Button></>}
     {activity}
   </section>;
 

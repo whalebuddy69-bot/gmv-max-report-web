@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationOverview } from "@/api/automation";
 import { MAX_OBSERVATION_AGE_MS } from "@/lib/automation";
 import { invalidateOtherAutoBudgetViews } from "./AutoBudgetStatusPanel";
-import { CreatorCampaignEditPanel, CreatorCampaignSchedule, CreatorEditBudgetMeter, creatorEditControlScope, findEditableCreatorCampaign, getCreatorEditSync, isCreatorEditSyncCurrent } from "./CreatorOverviewEdit";
+import { CreatorCampaignEditPanel, CreatorCampaignSchedule, CreatorEditBudgetMeter, creatorEditControlScope, findEditableCreatorCampaign, getCreatorEditSync, isCreatorEditSyncCurrent, resolveCreatorEditSnapshot } from "./CreatorOverviewEdit";
 
 const readAt = "2026-11-08T04:00:00.000Z";
 const now = Date.parse(readAt) + 1_000;
@@ -28,7 +28,7 @@ const selected = { ...client.campaign!, operationStatus: "ENABLE" } as const;
 afterEach(() => vi.restoreAllMocks());
 
 describe("creator overview edit scope", () => {
-  it("makes explicit, fresh sync local to the exact creator, advertiser and TikTok account", () => {
+  it("makes the fresh read local to the exact creator, advertiser and TikTok account", () => {
     expect(getCreatorEditSync(null, client, now)).toBeNull();
     expect(getCreatorEditSync(overview(), client, now)).toBeNull();
     expect(getCreatorEditSync(overview({ ...client, clientId: "srihiw" }), client, now)).toBeNull();
@@ -37,6 +37,14 @@ describe("creator overview edit scope", () => {
     expect(getCreatorEditSync(overview({ ...client, access: "unavailable" }), client, now)).toBeNull();
     expect(getCreatorEditSync(overview({ ...client, reportingDate: "2026-11-07" }), client, now)).toBeNull();
     expect(isCreatorEditSyncCurrent(getCreatorEditSync(overview(client), client, now), client, now)).toBe(true);
+  });
+
+  it("accepts an automatic edit snapshot only for the exact current and enabled campaign", () => {
+    expect(resolveCreatorEditSnapshot(overview(client), client, selected, now)).toMatchObject({ client, proof: { campaignId: selected.campaignId } });
+    expect(resolveCreatorEditSnapshot(overview(client), client, { ...selected, operationStatus: "DISABLE" }, now)).toBeNull();
+    expect(resolveCreatorEditSnapshot(overview(client), client, { ...selected, campaignId: "other-campaign" }, now)).toBeNull();
+    expect(resolveCreatorEditSnapshot(overview({ ...client, tiktokAccountId: "other-identity" }), client, selected, now)).toBeNull();
+    expect(resolveCreatorEditSnapshot(overview(client), client, selected, now + MAX_OBSERVATION_AGE_MS)).toBeNull();
   });
 
   it("does not transfer a sync to another campaign, day or an expired snapshot even when polling has fresher data", () => {
@@ -95,7 +103,7 @@ describe("creator overview edit scope", () => {
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
     expect(html).toContain("Daily budget (THB)");
-    expect(html).toContain("Daily Ceiling (THB)");
+    expect(html).toContain("Daily Ceiling");
     expect(html).toContain("×");
     expect(html).toContain("7.30×");
     expect(html).toContain("กลับไปรายการ");
@@ -104,7 +112,8 @@ describe("creator overview edit scope", () => {
     expect(html).not.toContain("ใช้ถึง 80% → เพิ่มงบ 20%");
     expect(html).not.toContain('role="tab');
     expect(html).not.toContain("ตรวจ ROI");
-    expect(html).toContain("Sync บัญชีนี้ก่อนแก้งบ");
+    expect(html).toContain("กำลังอ่านข้อมูลล่าสุดจาก TikTok");
+    expect(html).not.toContain("Sync แคมเปญนี้");
     queryClient.clear();
   });
 

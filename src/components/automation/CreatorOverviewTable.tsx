@@ -7,10 +7,10 @@ import type { CreatorOverviewRow } from "@/lib/creatorOverview";
 import { formatValue } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+const statusColumn = { id: "status", label: "Status", description: "Live หมายถึงแคมเปญเปิดอยู่ ไม่ได้ยืนยันว่าห้องกำลัง LIVE" } as const;
 const groups = [
   {
     id: "setup", label: "Setup", columns: [
-      { id: "status", label: "Status", description: "Live หมายถึงแคมเปญเปิดอยู่ ไม่ได้ยืนยันว่าห้องกำลัง LIVE" },
       { id: "scheduleTime", label: "Schedule time", description: "กำหนดการ (เวลาไทย)" },
       { id: "autoBudget", label: "Auto budget increase", description: "สถานะเพิ่มงบอัตโนมัติ" },
       { id: "totalBudgetMinor", label: "Total Budget", description: "งบที่ตั้งไว้", format: "money" },
@@ -32,11 +32,10 @@ const groups = [
 ] as const;
 
 type Group = (typeof groups)[number];
-type Column = Group["columns"][number];
-type ColumnId = Column["id"];
-type OptionalColumn = Exclude<Column, { id: "status" }>;
+type OptionalColumn = Group["columns"][number];
+type Column = typeof statusColumn | OptionalColumn;
 type OptionalColumnId = OptionalColumn["id"];
-type SortKey = "displayName" | ColumnId;
+type SortKey = "displayName" | Column["id"];
 export type CreatorOverviewTableSort = { key: SortKey; direction: "ascending" | "descending" };
 const initialSort: CreatorOverviewTableSort = { key: "displayName", direction: "ascending" };
 const names = new Intl.Collator("th", { numeric: true, sensitivity: "base" });
@@ -48,6 +47,7 @@ const autoStates = {
   pending: { order: 2, label: "กำลังตรวจสอบ", variant: "warning" },
   on: { order: 3, label: "เปิด", variant: "success" },
 } as const;
+const badgeClass = "px-1.5 py-0 text-[10px] leading-4";
 
 function sortValue(row: CreatorOverviewRow, key: Exclude<SortKey, "displayName">): number | null {
   if (key === "status") return row.active === null ? null : Number(row.active);
@@ -90,13 +90,13 @@ function Schedule({ schedule }: { schedule: CreatorOverviewRow["scheduleTime"] }
   const startClock = scheduleClock.format(start);
   if (end === null || !Number.isFinite(end.getTime())) return <>
     <span className="block font-medium">เริ่ม {startClock}</span>
-    <span className="block text-[11px] text-muted-foreground">{startDate}</span>
+    <span className="block text-[10px] text-muted-foreground">{startDate}</span>
   </>;
   const endDate = scheduleDay.format(end);
   const endClock = scheduleClock.format(end);
   if (startDate === endDate) return <>
     <span className="block font-medium">{startClock}–{endClock}</span>
-    <span className="block text-[11px] text-muted-foreground">{startDate}</span>
+    <span className="block text-[10px] text-muted-foreground">{startDate}</span>
   </>;
   return <>
     <span className="block">{startDate} {startClock}</span>
@@ -108,13 +108,13 @@ function Cell({ column, row }: { column: Column; row: CreatorOverviewRow }) {
   if (column.id === "status") {
     const label = row.active === true ? "Live" : row.active === false ? "Off" : "—";
     const title = row.active === true ? column.description : row.active === false ? "ไม่พบแคมเปญที่เปิดอยู่" : "ยังยืนยันสถานะไม่ได้";
-    return <Badge variant={row.active === true ? "success" : "outline"} title={title} aria-label={`${label}: ${title}`}>{label}</Badge>;
+    return <Badge className={badgeClass} variant={row.active === true ? "success" : "outline"} title={title} aria-label={`${label}: ${title}`}>{label}</Badge>;
   }
   if (column.id === "scheduleTime") return <Schedule schedule={row.scheduleTime} />;
   if (column.id === "autoBudget") {
     if (row.autoBudget === null) return <NoValue />;
     const { label, variant } = autoStates[row.autoBudget];
-    return <Badge variant={variant}>{label}</Badge>;
+    return <Badge className={badgeClass} variant={variant}>{label}</Badge>;
   }
   const value = row[column.id];
   if (value === null || !Number.isFinite(value)) return <NoValue />;
@@ -138,9 +138,9 @@ function SortButton({ label, description, sortKey, sort, onSort }: {
     title={description}
     aria-label={`${label}: เรียง${nextLabel}`}
     onClick={() => onSort(sortKey)}
-    className="inline-flex min-h-9 items-center justify-start gap-1.5 rounded px-1 py-1 text-start font-semibold hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+    className="inline-flex min-h-8 max-w-full items-center justify-start gap-0.5 rounded px-0.5 py-0.5 text-start leading-tight font-semibold hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring sm:gap-1"
   >
-    {label}<Icon aria-hidden="true" className={cn("h-3.5 w-3.5 shrink-0", selected ? "text-foreground" : "text-muted-foreground")} />
+    <span className="min-w-0">{label}</span><Icon aria-hidden="true" className={cn("size-3 shrink-0", selected ? "text-foreground" : "text-muted-foreground")} />
   </button>;
 }
 
@@ -160,17 +160,18 @@ function Identity({ row, expanded, panelId, onToggleExpand }: {
   const name = accountName(row);
   return <button type="button" aria-label={`${expanded ? "ย่อ" : "ขยาย"}แคมเปญของ ${name}`} aria-expanded={expanded}
     aria-controls={expanded ? panelId : undefined} onClick={() => onToggleExpand(row.clientId)}
-    className={cn("grid min-h-10 w-full min-w-0 grid-cols-[1rem_minmax(0,1fr)] items-center gap-1 rounded-md px-1 py-0.5 text-start hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring", expanded && "bg-muted/70")}>
-    <ChevronDown className={cn("size-4 text-muted-foreground transition-transform motion-reduce:transition-none", !expanded && "-rotate-90")} aria-hidden />
+    className={cn("grid min-h-9 w-full min-w-0 grid-cols-[0.75rem_minmax(0,1fr)] items-center gap-0.5 rounded-md px-0.5 py-0.5 text-start hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring sm:gap-1", expanded && "bg-muted/70")}>
+    <ChevronDown className={cn("size-3 text-muted-foreground transition-transform motion-reduce:transition-none", !expanded && "-rotate-90")} aria-hidden />
     <span className="min-w-0">
-      <span className="block truncate text-xs font-semibold sm:text-sm" title={row.tiktokUsername ? name : `${name} · ยังไม่ยืนยันชื่อผู้ใช้ TikTok`}>{name}</span>
-      <span className="block truncate font-mono text-[10px] font-normal text-muted-foreground tabular" title={row.tiktokAccountId}>{row.tiktokAccountId}</span>
+      <span className="block truncate text-[11px] font-semibold sm:text-xs" title={row.tiktokUsername ? name : `${name} · ยังไม่ยืนยันชื่อผู้ใช้ TikTok`}>{name}</span>
+      <span className="block truncate font-mono text-[9px] font-normal text-muted-foreground tabular sm:text-[10px]" title={row.tiktokAccountId}>{row.tiktokAccountId}</span>
       <span className="sr-only">{access.label}</span>
     </span>
   </button>;
 }
 
-const frozenCell = "sticky left-0 border-r bg-card shadow-[2px_0_4px_0_rgba(15,23,42,0.05)]";
+const frozenAccount = "sticky left-0 border-r bg-card";
+const frozenStatus = "sticky left-[var(--overview-account-width)] border-r bg-card shadow-[2px_0_4px_0_rgba(15,23,42,0.08)]";
 
 type CreatorOverviewTableProps = {
   rows: readonly CreatorOverviewRow[];
@@ -185,29 +186,38 @@ export function CreatorOverviewTableView({ rows, hidden, sort, expanded, onToggl
   onSort: (key: SortKey) => void;
 }) {
   const panelPrefix = useId();
-  const visibleGroups = groups.map((group) => ({ ...group, columns: group.columns.filter((column) => column.id === "status" || !hidden.has(column.id)) }))
+  const visibleGroups = groups.map((group) => ({ ...group, columns: group.columns.filter((column) => !hidden.has(column.id)) }))
     .filter(({ columns }) => columns.length > 0);
   const visibleColumns = visibleGroups.flatMap((group) => group.columns);
+  const totalColumns = 2 + visibleColumns.length;
   const groupStarts = new Set(visibleGroups.map(({ columns }) => columns[0]?.id));
   const header = (sortKey: SortKey, label: string, description?: string): ReactNode => <SortButton label={label} description={description} sortKey={sortKey} sort={sort} onSort={onSort} />;
-  return <div role="region" aria-label="ตาราง Creator และผลโฆษณา" tabIndex={0} className="scrollbar-thin relative w-full min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-lg border [container-type:inline-size] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
-    <table className="w-full table-auto border-separate border-spacing-0 text-left text-sm">
+  const hasGroups = visibleColumns.length > 0;
+  return <div role="region" aria-label="ตาราง Creator และผลโฆษณา" tabIndex={0}
+    className="scrollbar-thin relative w-full min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-lg border [container-type:inline-size] [--overview-account-width:7.125rem] [--overview-status-width:3.625rem] [--overview-metric-width:6.125rem] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:[--overview-account-width:8.75rem] sm:[--overview-status-width:4.25rem] sm:[--overview-metric-width:7rem]">
+    <table className="table-fixed border-separate border-spacing-0 text-left text-[11px] leading-snug sm:text-xs"
+      style={{ width: `max(100%, calc(var(--overview-account-width) + var(--overview-status-width) + ${visibleColumns.length} * var(--overview-metric-width)))` }}>
       <caption className="sr-only">ภาพรวมการตั้งค่าและผลโฆษณาแยกตาม Creator</caption>
-      <colgroup><col className="w-32 sm:w-40" /></colgroup>
+      {/* With fixed layout only unspecified optional columns receive surplus width.
+          When both pins are the only columns, Status takes the remainder. */}
+      <colgroup><col className="w-[var(--overview-account-width)]" /><col className={hasGroups ? "w-[var(--overview-status-width)]" : undefined} /></colgroup>
       {visibleGroups.map(({ id, columns }) => <colgroup key={id} span={columns.length} />)}
       <thead>
         <tr>
-          <th scope="col" rowSpan={2} aria-sort={sort.key === "displayName" ? sort.direction : undefined} className={cn(frozenCell, "z-20 min-w-32 border-b px-1.5 py-1.5 align-bottom sm:min-w-40 sm:px-2")}>
+          <th scope="col" rowSpan={hasGroups ? 2 : undefined} aria-sort={sort.key === "displayName" ? sort.direction : undefined} className={cn(frozenAccount, "z-20 border-b px-1.5 py-0.5 align-middle sm:px-2")}>
             {header("displayName", "TikTok account")}
           </th>
-          {visibleGroups.map(({ id, label, columns }, index) => <th key={id} scope="colgroup" colSpan={columns.length} className={cn("border-b bg-muted/70 px-3 py-2 text-xs font-semibold", index > 0 && "border-l")}>
+          <th scope="col" rowSpan={hasGroups ? 2 : undefined} aria-sort={sort.key === "status" ? sort.direction : undefined} className={cn(frozenStatus, "z-20 border-b px-1 py-0.5 align-middle sm:px-1.5")}>
+            {header("status", statusColumn.label, statusColumn.description)}
+          </th>
+          {visibleGroups.map(({ id, label, columns }, index) => <th key={id} scope="colgroup" colSpan={columns.length} className={cn("border-b bg-muted/70 px-2 py-1 text-[10px] font-semibold sm:text-[11px]", index > 0 && "border-l")}>
             {label}
           </th>)}
         </tr>
-        <tr>{visibleColumns.map((column) => <th key={column.id} scope="col" aria-sort={sort.key === column.id ? sort.direction : undefined}
-          className={cn("border-b bg-card px-2 py-1 align-middle whitespace-nowrap", column.id === "status" ? "min-w-20" : "min-w-28", "format" in column && "text-right", groupStarts.has(column.id) && column.id !== visibleColumns[0]?.id && "border-l")}>
+        {hasGroups && <tr>{visibleColumns.map((column) => <th key={column.id} scope="col" aria-sort={sort.key === column.id ? sort.direction : undefined}
+          className={cn("border-b bg-card px-1.5 py-0.5 align-middle sm:px-2", "format" in column && "text-right", groupStarts.has(column.id) && column.id !== visibleColumns[0]?.id && "border-l")}>
           {header(column.id, column.label, column.description)}
-        </th>)}</tr>
+        </th>)}</tr>}
       </thead>
       <tbody>
         {rows.map((row) => {
@@ -215,16 +225,19 @@ export function CreatorOverviewTableView({ rows, hidden, sort, expanded, onToggl
           const panelId = `${panelPrefix}-campaigns-${row.clientId}`;
           return <Fragment key={row.clientId}>
             <tr className="group">
-              <th scope="row" className={cn(frozenCell, "z-10 border-b px-1.5 py-1 align-middle group-last:border-b-0 sm:px-2")}>
-                <div className="w-[7.125rem] sm:w-36"><Identity row={row} expanded={isExpanded} panelId={panelId} onToggleExpand={onToggleExpand} /></div>
+              <th scope="row" className={cn(frozenAccount, "z-10 border-b px-1 py-0.5 align-middle group-last:border-b-0 sm:px-2")}>
+                <Identity row={row} expanded={isExpanded} panelId={panelId} onToggleExpand={onToggleExpand} />
               </th>
+              <td className={cn(frozenStatus, "z-10 border-b px-1 py-0.5 align-middle group-last:border-b-0 sm:px-1.5")}>
+                <Cell column={statusColumn} row={row} />
+              </td>
               {visibleColumns.map((column) => <td key={column.id}
-                className={cn("border-b px-2.5 py-1.5 align-middle whitespace-nowrap group-hover:bg-muted/35 group-last:border-b-0", "format" in column && "tabular text-right font-medium", groupStarts.has(column.id) && column.id !== visibleColumns[0]?.id && "border-l")}>
+                className={cn("border-b px-1.5 py-1 align-middle break-words group-hover:bg-muted/35 group-last:border-b-0 sm:px-2", "format" in column && "tabular text-right font-medium", groupStarts.has(column.id) && column.id !== visibleColumns[0]?.id && "border-l")}>
                 <Cell column={column} row={row} />
               </td>)}
             </tr>
             {isExpanded && <tr>
-              <td colSpan={1 + visibleColumns.length} className="border-b bg-muted/35 p-0">
+              <td colSpan={totalColumns} className="border-b bg-muted/35 p-0">
                 {/* The table can be wider than its viewport. Anchor the detail
                     panel to the viewport without changing the summary columns. */}
                 <div id={panelId} className="sticky left-0 min-w-0 max-w-full px-2.5 py-2.5 [width:100cqi] sm:px-3">
@@ -234,7 +247,7 @@ export function CreatorOverviewTableView({ rows, hidden, sort, expanded, onToggl
             </tr>}
           </Fragment>;
         })}
-        {rows.length === 0 && <tr><td colSpan={1 + visibleColumns.length} className="px-3 py-5 text-sm text-muted-foreground">ไม่พบ Creator ที่ตรงกับตัวกรอง</td></tr>}
+        {rows.length === 0 && <tr><td colSpan={totalColumns} className="px-3 py-4 text-xs text-muted-foreground">ไม่พบ Creator ที่ตรงกับตัวกรอง</td></tr>}
       </tbody>
     </table>
   </div>;
@@ -261,8 +274,7 @@ export function CreatorOverviewTable({ rows, expanded, onToggleExpand, renderExp
           <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 group-open/columns:rotate-180" />
         </summary>
         <div className="mt-2 grid gap-2 rounded-lg border bg-card p-2.5 sm:grid-cols-2">
-          {groups.map(({ id, label, columns: groupColumns }) => {
-            const columns = groupColumns.filter((column): column is OptionalColumn => column.id !== "status");
+          {groups.map(({ id, label, columns }) => {
             const allShown = columns.every((column) => !hidden.has(column.id));
             return <fieldset key={id} className="grid min-w-0 grid-cols-2 gap-x-1 rounded-md border px-2.5 pb-1.5 sm:grid-cols-1">
               <legend className="px-1 text-xs font-semibold">{label}</legend>

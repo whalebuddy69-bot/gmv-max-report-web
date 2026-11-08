@@ -27,7 +27,6 @@ type DialogProps = {
 type Row = Omit<AutomationCampaignToday, "scheduleStartAt" | "scheduleEndAt"> & { scheduleStartAt?: string | null; scheduleEndAt?: string | null };
 type Screen = { type: "edit"; id: string } | { type: "create" } | { type: "recovery" } | { type: "lifecycle"; row: Row; action: "PAUSE" | "RESUME" };
 const numericCampaign = /^[1-9]\d{5,30}$/;
-const adsManager = "https://ads.tiktok.com/i18n/";
 
 export function campaignsTodayForClient(data: AutomationCampaignsToday | undefined, client: AutomationClient, now: number) {
   if (!data || data.clientId !== client.clientId || data.reportingDate !== bangkokDay(now) || data.coverage === "unavailable" || !data.observedAt) return null;
@@ -78,14 +77,14 @@ function CampaignToggle({ row, action, onLifecycle }: {
   </button>;
 }
 
-const metricColumns = ["Cost", "GMV", "ROI", "SKU Orders", "Cost / Order", "LIVE Views", "Cost / LIVE View", "Viewer Boost Budget"] as const;
+const metricColumns = ["Viewer Boost", "Cost", "GMV", "ROI", "SKU Orders", "Cost / Order", "LIVE Views", "Cost / LIVE View"] as const;
 
 function breakdownCells(row: Row) {
   const money = (value: number | null | undefined) => value == null ? "—" : formatValue(value / 100, "currency");
   const count = (value: number | null | undefined) => value == null ? "—" : formatValue(value, "integer");
   const unit = (n: number | null | undefined) => row.spendMinor !== null && n != null && n > 0 ? money(row.spendMinor / n) : "—";
-  return [money(row.spendMinor), money(row.gmvMinor), row.roi === null ? "—" : `${formatValue(row.roi, "ratio")}×`, count(row.skuOrders),
-    unit(row.skuOrders), count(row.liveViews), unit(row.liveViews), money(row.viewerBoostBudgetMinor)];
+  return [money(row.viewerBoostBudgetMinor), money(row.spendMinor), money(row.gmvMinor), row.roi === null ? "—" : `${formatValue(row.roi, "ratio")}×`,
+    count(row.skuOrders), unit(row.skuOrders), count(row.liveViews), unit(row.liveViews)];
 }
 
 export function CreatorCampaignBreakdownTable({ rows, clientId, now, onEdit, onLifecycle }: {
@@ -94,16 +93,14 @@ export function CreatorCampaignBreakdownTable({ rows, clientId, now, onEdit, onL
 }) {
   const visible = visibleCampaignBreakdown(rows, now);
   const hasEnabled = rows.some((row) => row.operationStatus === "ENABLE");
-  const statusClass = "sticky right-0 z-10 border-l bg-card shadow-[-2px_0_4px_rgba(15,23,42,0.06)]";
   return <div role="region" aria-label="ผลแยกรายแคมเปญ" tabIndex={0} className="relative min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-md border bg-card focus-visible:outline-2 focus-visible:outline-ring">
-    <table className="w-full border-separate border-spacing-0 whitespace-nowrap text-xs">
+    <table className="w-full border-separate border-spacing-0 whitespace-nowrap text-[11px] sm:text-xs">
       <caption className="sr-only">แคมเปญที่เปิดหรือมี Cost วันนี้</caption>
       <thead className="bg-muted/40">
         <tr>
-          <th scope="col" className="border-b px-2 py-2 text-left font-semibold">On / Off</th>
-          <th scope="col" className="min-w-40 border-b px-2 py-2 text-left font-semibold">Campaign Name</th>
-          {metricColumns.map((label) => <th key={label} scope="col" className="border-b px-2.5 py-2 text-right font-semibold">{label}</th>)}
-          <th scope="col" className={cn(statusClass, "border-b px-2 py-2 text-center font-semibold")}>Status</th>
+          <th scope="col" className="min-w-44 border-b px-2 py-1.5 text-left font-semibold">Campaign Name</th>
+          <th scope="col" className="border-b px-2 py-1.5 text-center font-semibold">Status</th>
+          {metricColumns.map((label) => <th key={label} scope="col" className="border-b px-2 py-1.5 text-right font-semibold" title={label === "Viewer Boost" ? "Viewer Boost Budget" : undefined}>{label}</th>)}
         </tr>
       </thead>
       <tbody>
@@ -111,12 +108,11 @@ export function CreatorCampaignBreakdownTable({ rows, clientId, now, onEdit, onL
           const ended = endedTodayRow(row, now);
           const live = row.operationStatus === "ENABLE" && !ended;
           return <tr key={row.campaignId} className="group">
-            <td className="border-b px-1.5 text-center group-last:border-b-0"><CampaignToggle row={row}
-              action={allowedLifecycleIntent(row, clientId, hasEnabled, now)} onLifecycle={onLifecycle} /></td>
-            <th scope="row" className="border-b px-2 py-1.5 text-left group-last:border-b-0">
-              <div className="flex items-center gap-1.5">
+            <th scope="row" className="border-b px-1 py-1 text-left group-last:border-b-0">
+              <div className="flex items-center gap-1">
+                <CampaignToggle row={row} action={allowedLifecycleIntent(row, clientId, hasEnabled, now)} onLifecycle={onLifecycle} />
                 <div className="min-w-0 max-w-48 sm:max-w-64">
-                  <span className="block truncate text-sm font-semibold" title={row.campaignName}>{row.campaignName}</span>
+                  <span className="block truncate text-xs font-semibold" title={row.campaignName}>{row.campaignName}</span>
                   <span className="block font-mono text-[10px] font-normal text-muted-foreground">ID {row.campaignId}</span>
                 </div>
                 <Button type="button" variant="ghost" size="sm" className="min-h-10 shrink-0 px-2" aria-label={`แก้ไข ${row.campaignName}`} onClick={(event) => onEdit(row, event.currentTarget)}>
@@ -124,12 +120,12 @@ export function CreatorCampaignBreakdownTable({ rows, clientId, now, onEdit, onL
                 </Button>
               </div>
             </th>
-            {breakdownCells(row).map((value, index) => <td key={metricColumns[index]} className="border-b px-2.5 py-1.5 text-right tabular-nums group-last:border-b-0">{value}</td>)}
-            <td className={cn(statusClass, "border-b px-2 py-1.5 text-center group-last:border-b-0")}>
-              <Badge variant={live ? "success" : "outline"} title={live ? "แคมเปญเปิดอยู่ ไม่ใช่การยืนยันว่าห้องกำลัง LIVE" : undefined}>
+            <td className="border-b px-2 py-1 text-center group-last:border-b-0">
+              <Badge className="px-1.5 py-0 text-[10px]" variant={live ? "success" : "outline"} title={live ? "แคมเปญเปิดอยู่ ไม่ใช่การยืนยันว่าห้องกำลัง LIVE" : undefined}>
                 {row.operationStatus === "DELETE" ? "ลบแล้ว" : live ? "Live" : row.operationStatus === "ENABLE" ? "จบแล้ว" : "ปิด"}
               </Badge>
             </td>
+            {breakdownCells(row).map((value, index) => <td key={metricColumns[index]} className="border-b px-2 py-1 text-right tabular-nums group-last:border-b-0">{value}</td>)}
           </tr>;
         })}
       </tbody>
@@ -187,7 +183,7 @@ function CreateDraft({ current, onBack }: { current: Row | null; onBack: () => v
   return <>
     <Back onBack={onBack} />
     <CreatorCampaignFormSection title="สร้างแคมเปญใหม่" tag="แบบร่าง">
-      <p className="text-xs text-muted-foreground">หน้านี้เตรียมค่าเท่านั้น ยังส่งสร้าง Creator LIVE GMV Max ไป TikTok โดยตรงไม่ได้</p>
+      <p className="text-xs text-muted-foreground">เตรียมค่าได้ แต่ TikTok ยังไม่มี API ที่ยืนยันให้เว็บนี้สร้าง Creator LIVE GMV Max แบบไม่ผูก Shop ได้ จึงไม่มีการส่งคำสั่งหรือเปิดแคมเปญ</p>
       <p className="rounded-md bg-muted/55 px-2.5 py-1.5 text-xs">ROI จริงวันนี้ของแคมเปญปัจจุบัน: <strong>{current?.roi == null ? "—" : `${formatValue(current.roi, "ratio")}×`}</strong></p>
       <div className="grid min-w-0 grid-cols-2 gap-2">
         <div className="min-w-0">
@@ -213,7 +209,6 @@ function CreateDraft({ current, onBack }: { current: Row | null; onBack: () => v
       </details>
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" className="min-h-11" disabled={proposedRoi === null || proposedBudget === null || invalidEnd} onClick={() => void copyDraft()}>คัดลอกค่าที่กรอก</Button>
-        <Button asChild className="min-h-11"><a href={adsManager} target="_blank" rel="noopener noreferrer">เปิด TikTok Ads Manager <ExternalLink className="size-3.5" aria-hidden /></a></Button>
       </div>
       {notice && <p role="status" className="text-xs text-muted-foreground">{notice}</p>}
     </CreatorCampaignFormSection>

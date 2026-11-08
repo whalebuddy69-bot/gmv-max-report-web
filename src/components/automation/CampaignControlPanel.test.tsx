@@ -28,22 +28,27 @@ describe("Ppan campaign action review", () => {
     return result;
   }
 
-  it("shows the selected campaign's known ROI as a multiplier and keeps it read-only until exact Sync", () => {
+  it("shows the selected campaign's latest ROI automatically and keeps it read-only until the exact account read", () => {
     const beforeSync = renderRoiField(false, undefined);
     expect(beforeSync).toContain("LIVE ROI Target");
     expect(beforeSync).toContain("×");
     expect(beforeSync).not.toContain("THB");
     expect(beforeSync).toContain('readonly=""');
-    expect(beforeSync).toContain('value="5.8"');
+    expect(beforeSync).toContain('value="6.2"');
     expect(beforeSync).not.toContain("ตรวจ ROI");
+    expect(beforeSync).not.toContain("> อัปเดต");
     const unmatched = renderRoiField(true, "2234567890123456");
     expect(unmatched).toContain('readonly=""');
-    expect(unmatched).toContain('value="5.8"');
+    expect(unmatched).toContain('value="6.2"');
+    const wrongProvider = renderRoiField(true, campaignId, { ...status, campaign: { ...status.campaign, campaignId: "2234567890123456" } });
+    expect(wrongProvider).toContain('readonly=""');
+    expect(wrongProvider).toContain('value="5.8"');
     const exact = renderRoiField(true, campaignId);
     expect(exact).not.toContain('readonly=""');
     expect(exact).toContain('value="6.2"');
     expect(exact).not.toContain("ตรวจ ROI");
     expect(exact).not.toContain("บันทึก ROI Target");
+    expect(exact).not.toContain("> อัปเดต");
     expect(exact).toContain("โหมดทดลอง · ไม่บันทึกจริง");
     expect(exact).toContain("ยังไม่ส่งคำสั่งไป TikTok");
   });

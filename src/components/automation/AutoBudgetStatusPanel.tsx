@@ -300,7 +300,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
     {compact && <>
       <CompactAutoRow titleId={compactTitleId} status={pending
         ? <span role="status">{pending === "stop" ? "กำลังตรวจผลการหยุด…" : "กำลังเปิด Auto…"}</span>
-        : <span>{switchLabel}{!switchState && !stopId ? blockAutoStart ? " · มีรายการงบค้าง" : !campaignId ? " · Sync ก่อนเปิด" : "" : ""}</span>} controls={<>
+        : <span>{switchLabel}{!switchState && !stopId ? blockAutoStart ? " · มีรายการงบค้าง" : !campaignId ? " · ยังไม่ยืนยันแคมเปญ" : "" : ""}</span>} controls={<>
         {switchState !== null ? <button type="button" role="switch" aria-checked={switchState} aria-label="Auto budget increase"
           disabled={pending !== null || needsFreshRead || (switchState ? !stopId : !!stopId || !preview || blockAutoStart || draft !== null || (!continuous && !durationValid))}
           onClick={() => { if (switchState) void stop(); else review(); }}
@@ -403,7 +403,7 @@ export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = 
         <p>ใช้ถึง 80% → เพิ่มงบ 20% เมื่อผ่านเพดานและเงื่อนไขความปลอดภัย</p>
         <p>ยอดใช้จากรายงานอาจล่าช้า และไม่ได้ยืนยันว่ากำลังไลฟ์อยู่</p>
         {blockAutoStart && <p>จัดการรายการงบหรือเพดานที่ค้างก่อนเปิด Auto</p>}
-        {readCompactSummary ? <p>ต้อง Sync และพบแคมเปญที่เปิดอยู่ก่อนเปิด Auto</p>
+        {readCompactSummary ? <p>ต้องยืนยันแคมเปญที่เปิดอยู่ก่อนเปิด Auto</p>
           : query.isSuccess && <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />}
       </>}
     </div>

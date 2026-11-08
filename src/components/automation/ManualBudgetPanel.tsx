@@ -106,7 +106,6 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
   renderBetweenBudgetAndCeiling?: (blockAutoStart: boolean) => ReactNode;
 }) {
   const titleId = useId();
-  const ceilingTitleId = useId();
   const inputId = useId();
   const [now, setNow] = useState(Date.now);
   const [direction, setDirection] = useState<BudgetDirection | null>(null);
@@ -321,7 +320,7 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
         <form onSubmit={(event) => void prepare(event)} className="space-y-2">
           {inlineAmountField(true)}
           {!enabled && <p className="text-xs text-muted-foreground">
-            {!active ? "Sync บัญชีนี้ก่อนแก้งบ" : cap?.locked ? "มีรายการที่ยังต้องตรวจสอบ จึงยังไม่เปิดให้แก้งบอีกครั้ง" : status?.mode === "disabled" ? "บัญชีนี้ยังไม่ได้เปิดสิทธิ์สั่งปรับงบ" : "ต้องยืนยันสิทธิ์ แคมเปญ ยอดใช้ และเพดานล่าสุดก่อน"}
+            {!active ? "ยังไม่ยืนยันแคมเปญล่าสุดสำหรับแก้งบ" : cap?.locked ? "มีรายการที่ยังต้องตรวจสอบ จึงยังไม่เปิดให้แก้งบอีกครั้ง" : status?.mode === "disabled" ? "บัญชีนี้ยังไม่ได้เปิดสิทธิ์สั่งปรับงบ" : "ต้องยืนยันสิทธิ์ แคมเปญ ยอดใช้ และเพดานล่าสุดก่อน"}
           </p>}
           {inlineDraft && <>
             {!inlineDraftMatches && <p role="status" className="text-xs text-muted-foreground">แคมเปญหรืองบปัจจุบันเปลี่ยนแล้ว กรุณายกเลิกและกรอกใหม่</p>}
@@ -369,13 +368,7 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
       {error}
     </section>
     {renderBetweenBudgetAndCeiling?.(capEditorBlocked || editingCap)}
-    <section className="min-w-0 space-y-2.5 rounded-lg border border-border bg-card p-3.5 sm:p-4" aria-labelledby={ceilingTitleId}>
-      <div>
-        <h3 id={ceilingTitleId} className="text-base font-semibold">Daily Ceiling</h3>
-        <p className="mt-1 text-xs text-muted-foreground">เพดานคุมงบรวมต่อวันของ Creator นี้ ไม่ใช่งบที่ส่งให้ TikTok</p>
-      </div>
-      {ceilingEditor}
-    </section>
+    {ceilingEditor}
   </>;
 
   return (

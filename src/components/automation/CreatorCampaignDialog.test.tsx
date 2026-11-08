@@ -87,11 +87,13 @@ describe("Creator campaign picker", () => {
       .toEqual([active.campaignId, stopped.campaignId]);
   });
 
-  it("places the switch before the name and status on the right with scoped campaign metrics", () => {
+  it("shows campaign, status and Viewer Boost first, with the switch before the name", () => {
     const html = renderToStaticMarkup(<CreatorCampaignBreakdownTable rows={[{ ...active, skuOrders: 5, liveViews: 20 },
       { ...stopped, viewerBoostBudgetMinor: 125_000 }]} clientId={client.clientId} now={now} onEdit={() => {}} onLifecycle={() => {}} />);
     expect(html.indexOf('role="switch"')).toBeLessThan(html.indexOf(active.campaignName));
-    expect(html.indexOf("Viewer Boost Budget")).toBeLessThan(html.indexOf(">Status<"));
+    expect(html.indexOf(">Campaign Name<")).toBeLessThan(html.indexOf(">Status<"));
+    expect(html.indexOf(">Status<")).toBeLessThan(html.indexOf(">Viewer Boost<"));
+    expect(html.indexOf(">Viewer Boost<")).toBeLessThan(html.indexOf(">Cost<"));
     for (const item of [active.campaignId, stopped.campaignId, "฿1,000.00", "฿2,500.00", "2.50×", "฿200.00", "฿50.00", "฿1,250.00", ">Live<", ">ปิด<"]) expect(html).toContain(item);
   });
 });
