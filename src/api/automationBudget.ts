@@ -15,11 +15,15 @@ const extraBudgetIds = [SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CL
 const budgetIds = [PILOT_BUDGET_CLIENT_ID, ...extraBudgetIds] as const;
 export type AdditionalBudgetCapClientId = typeof extraBudgetIds[number];
 export type BudgetCapClientId = typeof budgetIds[number];
+export type ContinuousBudgetClientId = typeof PILOT_BUDGET_CLIENT_ID | typeof SRIHIW_CAP_CLIENT_ID;
 export function isAdditionalBudgetCapClientId(value: string): value is AdditionalBudgetCapClientId {
   return extraBudgetIds.some((clientId) => clientId === value);
 }
 export function isBudgetCapClientId(value: string): value is BudgetCapClientId {
   return value === PILOT_BUDGET_CLIENT_ID || isAdditionalBudgetCapClientId(value);
+}
+export function isContinuousBudgetClientId(value: string): value is ContinuousBudgetClientId {
+  return value === PILOT_BUDGET_CLIENT_ID || value === SRIHIW_CAP_CLIENT_ID;
 }
 const capSchema = z.object({
   revision: z.number().int().safe().positive(),
@@ -88,11 +92,12 @@ export const budgetAutoStatusSchema = z.object({
   blockers: z.array(autoStatusCode).max(24),
   canArm: z.boolean().optional(),
   canStop: z.boolean().optional(),
-}).refine((value) => value.strategy !== "continuous" || value.clientId === PILOT_BUDGET_CLIENT_ID,
-"continuous Auto is Ppan-only").refine((value) => value.continuousSession == null
-  || (value.clientId === PILOT_BUDGET_CLIENT_ID && value.strategy === "continuous"), "invalid continuous Auto session scope")
-  .refine((value) => value.evidenceMode !== "spend-trend" || (value.clientId === PILOT_BUDGET_CLIENT_ID && value.strategy === "continuous"),
-    "spend-trend Auto is Ppan continuous-only");
+}).refine((value) => value.strategy !== "continuous" || (isContinuousBudgetClientId(value.clientId)
+  && (value.clientId === PILOT_BUDGET_CLIENT_ID || value.evidenceMode === "spend-trend")), "invalid continuous Auto strategy scope")
+  .refine((value) => value.continuousSession == null || (isContinuousBudgetClientId(value.clientId) && value.strategy === "continuous"),
+    "invalid continuous Auto session scope")
+  .refine((value) => value.evidenceMode !== "spend-trend" || (isContinuousBudgetClientId(value.clientId) && value.strategy === "continuous"),
+    "spend-trend requires a supported continuous Auto scope");
 
 const budgetAutoExactArmInputSchema = z.object({
   expectedCampaignId: tiktokNumericId,
@@ -205,18 +210,24 @@ export function stopBudgetAuto(clientId: BudgetCapClientId, grantId: string) {
   );
 }
 
-/** Continuous commands are intentionally fixed to Ppan, never a caller-selected Creator. */
-export function armPpanBudgetAutoContinuous(input: BudgetAutoContinuousArmInput) {
-  return request(budgetAutoContinuousArmResultSchema, "Ppan continuous Auto arm", () =>
-    http.post(`${budgetPath(PILOT_BUDGET_CLIENT_ID)}/auto/arm`, budgetAutoContinuousArmInputSchema.parse(input)),
-  );
+/** Continuous commands only exist on the explicitly enabled Ppan/Srihiw routes. */
+export function armBudgetAutoContinuous(clientId: BudgetCapClientId, input: BudgetAutoContinuousArmInput) {
+  return request(budgetAutoContinuousArmResultSchema, "Continuous Auto arm", () => {
+    if (!isContinuousBudgetClientId(clientId)) throw new Error("Invalid continuous Auto scope");
+    const body = clientId === SRIHIW_CAP_CLIENT_ID ? budgetAutoSpendTrendArmInputSchema.parse(input) : budgetAutoContinuousArmInputSchema.parse(input);
+    return http.post(`${budgetPath(clientId)}/auto/arm`, body);
+  });
 }
 
-export function stopPpanBudgetAutoContinuous(sessionId: string) {
-  return request(budgetAutoStopResultSchema, "Ppan continuous Auto stop", () =>
-    http.post(`${budgetPath(PILOT_BUDGET_CLIENT_ID)}/auto/stop`, { sessionId: operationId.parse(sessionId) }),
-  );
+export function stopBudgetAutoContinuous(clientId: BudgetCapClientId, sessionId: string) {
+  return request(budgetAutoStopResultSchema, "Continuous Auto stop", () => {
+    if (!isContinuousBudgetClientId(clientId)) throw new Error("Invalid continuous Auto scope");
+    return http.post(`${budgetPath(clientId)}/auto/stop`, { sessionId: operationId.parse(sessionId) });
+  });
 }
+
+export const armPpanBudgetAutoContinuous = (input: BudgetAutoContinuousArmInput) => armBudgetAutoContinuous(PILOT_BUDGET_CLIENT_ID, input);
+export const stopPpanBudgetAutoContinuous = (sessionId: string) => stopBudgetAutoContinuous(PILOT_BUDGET_CLIENT_ID, sessionId);
 
 /** Deliberate user action only; a failed response is reconciled with GET, never retried here. */
 export function changeBudgetCap(clientId: BudgetCapClientId, input: BudgetCapInput) {

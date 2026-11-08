@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
-import { armBudgetAuto, armPpanBudgetAutoContinuous, ASHOP_CAP_CLIENT_ID, budgetAutoStatusSchema, fetchBudgetAutoStatus, NNSHOP_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, stopBudgetAuto, stopPpanBudgetAutoContinuous, type BudgetAutoStatus } from "@/api/automationBudget";
+import { armBudgetAuto, armBudgetAutoContinuous, armPpanBudgetAutoContinuous, ASHOP_CAP_CLIENT_ID, budgetAutoStatusSchema, fetchBudgetAutoStatus, NNSHOP_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, stopBudgetAuto, stopBudgetAutoContinuous, stopPpanBudgetAutoContinuous, type BudgetAutoStatus } from "@/api/automationBudget";
 import { http } from "@/api/client";
 import { AutoBudgetControls, AutoBudgetStatusBody, getAutoArmPreview } from "./AutoBudgetStatusPanel";
 
@@ -218,5 +218,23 @@ describe("Ppan continuous Auto", () => {
     await expect(armPpanBudgetAutoContinuous(withRoom)).rejects.toThrow();
     await expect(armPpanBudgetAutoContinuous(withAttestation)).rejects.toThrow();
     expect(post.mock.calls).toEqual([["/automation/budget/auto/arm", input]]);
+  });
+
+  it("accepts Srihiw spend-trend only and never routes its continuous commands through Ppan", async () => {
+    const scoped = { ...spendTrend, clientId: SRIHIW_CAP_CLIENT_ID } satisfies BudgetAutoStatus;
+    expect(budgetAutoStatusSchema.safeParse(scoped).success).toBe(true);
+    expect(budgetAutoStatusSchema.safeParse({ ...scoped, evidenceMode: undefined }).success).toBe(false);
+    expect(budgetAutoStatusSchema.safeParse({ ...scoped, clientId: ASHOP_CAP_CLIENT_ID }).success).toBe(false);
+    expect(getAutoArmPreview(scoped, sampleNumericCampaign, now)).toEqual(scoped.preview);
+    expect(getAutoArmPreview({ ...scoped, evidenceMode: undefined }, sampleNumericCampaign, now)).toBeNull();
+    const post = vi.spyOn(http, "post").mockResolvedValueOnce({ data: { sessionId, startedAt: observedAt } })
+      .mockResolvedValueOnce({ data: { stopped: true } });
+    const input = { expectedCampaignId: sampleNumericCampaign, expectedBudgetMinor: 800_000, expectedPolicyRevision: 2, evidenceMode: "spend-trend" } as const;
+    await expect(armBudgetAutoContinuous(SRIHIW_CAP_CLIENT_ID, input)).resolves.toEqual({ sessionId, startedAt: observedAt });
+    await expect(stopBudgetAutoContinuous(SRIHIW_CAP_CLIENT_ID, sessionId)).resolves.toEqual({ stopped: true });
+    await expect(armBudgetAutoContinuous(SRIHIW_CAP_CLIENT_ID, { expectedCampaignId: sampleNumericCampaign, expectedBudgetMinor: 800_000,
+      expectedPolicyRevision: 2, expectedLiveSessionId: sampleLiveSessionId, nativeAutoOff: true, noConcurrentChanges: true })).rejects.toThrow();
+    await expect(stopBudgetAutoContinuous(NNSHOP_CAP_CLIENT_ID, sessionId)).rejects.toThrow();
+    expect(post.mock.calls).toEqual([["/automation/budget/srihiw/auto/arm", input], ["/automation/budget/srihiw/auto/stop", { sessionId }]]);
   });
 });

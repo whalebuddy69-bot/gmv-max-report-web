@@ -2,7 +2,7 @@ import { useId, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
-import { armBudgetAuto, armPpanBudgetAutoContinuous, fetchBudgetAutoStatus, stopBudgetAuto, stopPpanBudgetAutoContinuous,
+import { armBudgetAuto, armBudgetAutoContinuous, fetchBudgetAutoStatus, isContinuousBudgetClientId, stopBudgetAuto, stopBudgetAutoContinuous,
   type BudgetAutoArmInput, type BudgetAutoSpendTrendArmInput, type BudgetAutoVerifiedContinuousArmInput, type BudgetAutoStatus,
   type BudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
@@ -77,7 +77,8 @@ type AutoDraft = { strategy: "one-shot"; input: Omit<BudgetAutoArmInput, AutoAtt
   | { strategy: "continuous"; evidenceMode: "spend-trend"; input: BudgetAutoSpendTrendArmInput };
 
 function isContinuous(data: BudgetAutoStatus): boolean {
-  return data.clientId === PILOT_BUDGET_CLIENT_ID && data.strategy === "continuous";
+  return isContinuousBudgetClientId(data.clientId) && data.strategy === "continuous"
+    && (data.clientId === PILOT_BUDGET_CLIENT_ID || data.evidenceMode === "spend-trend");
 }
 
 function usesSpendTrend(data: BudgetAutoStatus): boolean {
@@ -126,8 +127,6 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
   const sessionReason = session?.reason ? continuousReasons.get(session.reason) ?? blockers.get(session.reason) ?? previews.get(session.reason) ?? "ระบบยังไม่ยืนยันเงื่อนไขให้เพิ่มงบ" : null;
   return <>
     <Badge variant="outline" className="mt-2 whitespace-normal">{continuous && data.mode === "live" ? "โหมดจริง · ทำงานเมื่อเปิด Auto และเข้าเกณฑ์" : modeLabels[data.mode]}</Badge>
-    {continuous && <p className="mt-2 text-xs text-muted-foreground">Auto ต่อเนื่อง · {continuousRule} · {spendTrend ? spendTrendStopRule : continuousStopRule}</p>}
-    {spendTrend && <p className="mt-2 text-xs text-muted-foreground">{spendTrendRule} · {spendTrendCaveat}</p>}
     {session && <p className="mt-2 text-xs text-muted-foreground">สถานะ Auto ต่อเนื่อง: {continuousLabels[session.status]} · เริ่ม {time.format(new Date(session.startedAt))} (เวลาไทย){sessionReason ? ` · ${sessionReason}` : ""}</p>}
     {data.grant && <p className="mt-2 text-xs text-muted-foreground">รอบ Auto: {grantLabels.get(data.grant.status) ?? "ดูสถานะจากระบบ"} · สิ้นสุดตามกำหนด {time.format(new Date(data.grant.expiresAt))} (เวลาไทย)</p>}
     {preview ? <div className="mt-3 space-y-2">
@@ -147,6 +146,11 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
         {reasons.map((reason) => <li key={reason}>{reason}</li>)}
       </ul>
     </div>}
+    {continuous && <details className="mt-2 text-xs text-muted-foreground">
+      <summary className="w-fit cursor-pointer py-1">หลักเกณฑ์และข้อจำกัดของ Auto ต่อเนื่อง</summary>
+      <p className="mt-1">{continuousRule} · {spendTrend ? spendTrendStopRule : continuousStopRule}</p>
+      {spendTrend && <p className="mt-1">{spendTrendRule} · {spendTrendCaveat}</p>}
+    </details>}
   </>;
 }
 
@@ -212,7 +216,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
     setLastAttemptAt(dataUpdatedAt);
     try {
       if (draft.strategy === "continuous") {
-        const session = await armPpanBudgetAutoContinuous(draft.evidenceMode === "spend-trend" ? draft.input
+        const session = await armBudgetAutoContinuous(clientId, draft.evidenceMode === "spend-trend" ? draft.input
           : { ...draft.input, nativeAutoOff: true, noConcurrentChanges: true });
         setNotice(`บันทึกการเปิด Auto ต่อเนื่องแล้ว · เริ่ม ${time.format(new Date(session.startedAt))} (เวลาไทย) · ยังไม่ยืนยันว่าเพิ่มงบ`);
       } else {
@@ -238,7 +242,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
     setNotice("");
     setLastAttemptAt(dataUpdatedAt);
     try {
-      const result = stopSessionId ? await stopPpanBudgetAutoContinuous(stopSessionId) : await stopBudgetAuto(clientId, stopId);
+      const result = stopSessionId ? await stopBudgetAutoContinuous(clientId, stopSessionId) : await stopBudgetAuto(clientId, stopId);
       setNotice(result.stopped
         ? `บันทึกการหยุด${stopSessionId ? " Auto ต่อเนื่อง" : "รอบ Auto"}แล้ว · คำสั่งที่ส่งไปก่อนหน้านี้อาจยังมีผล`
         : "ยังยืนยันการหยุดไม่ได้ กรุณาตรวจสถานะล่าสุดก่อนส่งคำสั่งใหม่");

@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import { automationOverviewSchema, automationPerformancePath, automationPerformanceSchema, PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
 import { bangkokDay, creatorRowPerformance, isFreshAutomationClient, isStalePerformance, performanceMatchesClient, summarizeCreatorPerformance, toHourlyChart } from "@/lib/automation";
-import { AccessStatus, BudgetMeter, CreatorRows, ReadOnlyActions } from "./Automation";
+import { AccessStatus, BudgetMeter, CreatorRow, CreatorRows, ReadOnlyActions } from "./Automation";
 
 const CHECKED = "2026-03-05T17:00:10.000Z";
 const now = Date.parse(CHECKED);
@@ -133,6 +133,22 @@ describe("Automation frontend", () => {
     expect(html.match(/<li /g)).toHaveLength(2);
     expect(html).not.toContain("เพิ่มงบอัตโนมัติ");
     expect(html).not.toContain("กำลังตรวจสถานะ Auto");
+  });
+
+  it("opens the compact Auto section first without opening the chart or campaign actions", () => {
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <CreatorRow client={{ ...client, clientId: "srihiw", access: "unavailable", observedAt: null, campaign: null }} userId={17} now={now}
+          eager={false} expanded onToggle={() => {}} onRefreshCampaign={() => {}} />
+      </QueryClientProvider>,
+    );
+    expect(html).toMatch(/id="automation-creator-detail-srihiw-auto-button"[^>]*aria-pressed="true"/);
+    expect(html).toContain('id="automation-creator-detail-srihiw-budget" hidden=""');
+    expect(html).toContain('id="automation-creator-detail-srihiw-campaign" hidden=""');
+    expect(html).toContain('id="automation-creator-detail-srihiw-performance" hidden=""');
+    expect(html).toContain("กำลังตรวจสถานะ Auto");
+    expect(html).not.toContain("Performance รายชั่วโมง");
+    expect(html).not.toContain("Ad Account ID");
   });
 
   it("orders provider labels, converts satang, and preserves real zero vs unknown gaps", () => {
