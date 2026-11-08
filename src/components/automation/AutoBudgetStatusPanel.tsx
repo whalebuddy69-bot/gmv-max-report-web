@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type FormEvent } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
 import { armBudgetAuto, armBudgetAutoContinuous, fetchBudgetAutoStatus, isContinuousBudgetClientId, stopBudgetAuto, stopBudgetAutoContinuous,
@@ -154,12 +154,13 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
   </>;
 }
 
-export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, refresh }: {
+export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, refresh, onChanged }: {
   data: BudgetAutoStatus;
   campaignId: string | null;
   clientId: BudgetCapClientId;
   dataUpdatedAt: number;
   refresh: () => Promise<unknown>;
+  onChanged?: () => void;
 }) {
   const [duration, setDuration] = useState("30");
   const [draft, setDraft] = useState<AutoDraft | null>(null);
@@ -223,6 +224,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
         const grant = await armBudgetAuto(clientId, { ...draft.input, nativeAutoOff: true, noConcurrentChanges: true });
         setNotice(`บันทึกรอบ Auto แล้ว · สิ้นสุด ${time.format(new Date(grant.expiresAt))} (เวลาไทย) · ยังไม่ยืนยันว่าเพิ่มงบ`);
       }
+      onChanged?.();
     } catch {
       setNotice("ยังยืนยันการเปิดรอบไม่ได้ กรุณาตรวจสถานะล่าสุดก่อนส่งคำสั่งใหม่");
     } finally {
@@ -246,6 +248,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
       setNotice(result.stopped
         ? `บันทึกการหยุด${stopSessionId ? " Auto ต่อเนื่อง" : "รอบ Auto"}แล้ว · คำสั่งที่ส่งไปก่อนหน้านี้อาจยังมีผล`
         : "ยังยืนยันการหยุดไม่ได้ กรุณาตรวจสถานะล่าสุดก่อนส่งคำสั่งใหม่");
+      if (result.stopped) onChanged?.();
     } catch {
       setNotice("ยังยืนยันการหยุดไม่ได้ กรุณาตรวจสถานะล่าสุดก่อนส่งคำสั่งใหม่");
     } finally {
@@ -288,6 +291,15 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   </div>;
 }
 
+/** Invalidate display-only summaries and any previous detailed key after a confirmed change. */
+export function invalidateOtherAutoBudgetViews(queryClient: QueryClient, userId: number, clientId: BudgetCapClientId, campaignId: string | null) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["automation", "budget-auto-overview", userId, clientId], exact: true }),
+    queryClient.invalidateQueries({ queryKey: ["automation", "budget-auto-status", userId, clientId],
+      predicate: (candidate) => candidate.queryKey[4] !== campaignId }),
+  ]);
+}
+
 /** Mounted only for the expanded, scoped Creator row; server capabilities govern all controls. */
 export function AutoBudgetStatusPanel({ clientId, userId, campaignId }: {
   clientId: BudgetCapClientId;
@@ -295,6 +307,7 @@ export function AutoBudgetStatusPanel({ clientId, userId, campaignId }: {
   campaignId: string | null;
 }) {
   const titleId = useId();
+  const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ["automation", "budget-auto-status", userId, clientId, campaignId],
     queryFn: ({ signal }) => fetchBudgetAutoStatus(clientId, signal),
@@ -313,7 +326,8 @@ export function AutoBudgetStatusPanel({ clientId, userId, campaignId }: {
     {query.isSuccess
       ? <>
         <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />
-        <AutoBudgetControls key={`${userId}:${clientId}:${campaignId ?? "none"}`} data={query.data} clientId={clientId} campaignId={campaignId} dataUpdatedAt={query.dataUpdatedAt} refresh={query.refetch} />
+        <AutoBudgetControls key={`${userId}:${clientId}:${campaignId ?? "none"}`} data={query.data} clientId={clientId} campaignId={campaignId} dataUpdatedAt={query.dataUpdatedAt} refresh={query.refetch}
+          onChanged={() => { void invalidateOtherAutoBudgetViews(queryClient, userId, clientId, campaignId); }} />
       </>
       : <p role="status" className="mt-2 text-xs text-muted-foreground">
         {query.isPending ? "กำลังตรวจสถานะ Auto…" : "ยังอ่านสถานะ Auto ไม่ได้"}

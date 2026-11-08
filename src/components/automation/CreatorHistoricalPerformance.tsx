@@ -1,11 +1,11 @@
-import { useId, useState } from "react";
+import { lazy, Suspense, useId, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import type { AutomationClient, AutomationPerformance, AutomationPoint } from "@/api/automation";
 import { ApiError } from "@/api/client";
 import { EmptyState, LoadingState } from "@/components/shared/StateViews";
 import { Button } from "@/components/ui/button";
-import { BANGKOK, performanceMatchesClient, summarizeCreatorPerformance, type AutomationMetric } from "@/lib/automation";
+import { BANGKOK, performanceMatchesClient, summarizeCreatorPerformance, toHourlyChart, totalForReturnedHours, type AutomationMetric } from "@/lib/automation";
 import { formatValue } from "@/lib/format";
 
 const METRICS = {
@@ -18,6 +18,7 @@ const METRICS = {
 const METRIC_KEYS = Object.keys(METRICS) as AutomationMetric[];
 const readTime = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, hour: "2-digit", minute: "2-digit" });
 type View = "hourly" | "daily";
+const CreatorHourlyChart = lazy(() => import("@/components/automation/CreatorHourlyChart"));
 type HistoricalProps = {
   client: AutomationClient;
   result: UseQueryResult<AutomationPerformance, Error>;
@@ -32,15 +33,7 @@ function printable(metric: AutomationMetric, value: number | null) {
 
 /** A subtotal of supplied hour rows, not an account daily total. Never fill missing metrics with zero. */
 export function summarizeReportedHours(series: readonly AutomationPoint[]) {
-  let spendMinor: number | null = series.length > 0 ? 0 : null;
-  for (const point of series) {
-    if (spendMinor === null || point.spendMinor === null || !Number.isSafeInteger(spendMinor + point.spendMinor)) {
-      spendMinor = null;
-      break;
-    }
-    spendMinor += point.spendMinor;
-  }
-  return { spendMinor, ...summarizeCreatorPerformance(series) };
+  return { spendMinor: totalForReturnedHours(series, "spendMinor"), ...summarizeCreatorPerformance(series) };
 }
 
 export function CreatorHistoricalPerformanceBody({
@@ -71,8 +64,12 @@ export function CreatorHistoricalPerformanceBody({
     </div>;
   }
 
+  const chart = toHourlyChart(exact.series, metric);
   return <div className="space-y-2">
     {caption}
+    {chart.some(({ value }) => value !== null) && <Suspense fallback={<p className="text-xs text-muted-foreground">กำลังโหลดกราฟ…</p>}>
+      <CreatorHourlyChart rows={chart} label={METRICS[metric].label} format={METRICS[metric].format} />
+    </Suspense>}
     <table className="w-full text-sm" aria-label={`รายงานรายชั่วโมง: ${METRICS[metric].label}`}>
       <thead><tr className="border-b text-left">
         <th className="py-2 font-medium" scope="col">ชั่วโมงตามรายงาน TikTok</th>

@@ -47,7 +47,7 @@ export function creatorRowPerformance(result: AutomationPerformance | undefined,
 
 type SummableMetric = "spendMinor" | "gmvMinor" | "orders" | "liveViews";
 
-function totalForReturnedHours(series: readonly AutomationPoint[], metric: SummableMetric) {
+export function totalForReturnedHours(series: readonly AutomationPoint[], metric: SummableMetric) {
   if (series.length === 0) return null;
   let total = 0;
   for (const point of series) {

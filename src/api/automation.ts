@@ -19,6 +19,9 @@ const campaignSchema = z.object({
   spendMinor: moneyMinor.nullable(),
   targetRoi: nullableRoi,
   currency: z.literal("THB"),
+  scheduleStartAt: instant.nullable().optional(),
+  scheduleEndAt: instant.nullable().optional(),
+  viewerBoostBudgetMinor: moneyMinor.nullable().optional(),
 });
 const clientSchema = z.object({
   clientId: creatorId,

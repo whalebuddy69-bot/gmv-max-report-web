@@ -81,6 +81,7 @@ export const budgetAutoStatusSchema = z.object({
   mode: z.enum(["disabled", "shadow", "live"]),
   strategy: z.enum(["continuous", "one-shot"]).optional(),
   evidenceMode: z.literal("spend-trend").optional(),
+  overviewState: z.enum(["on", "off", "pending", "blocked"]).nullable().optional(),
   grant: z.object({ grantId: operationId, status: autoStatusCode, expiresAt: instant }).nullable(),
   continuousSession: z.object({
     sessionId: operationId,
@@ -189,6 +190,11 @@ export function fetchBudgetAutoStatus(clientId: BudgetCapClientId, signal?: Abor
   return request(budgetAutoStatusSchema.refine((value) => value.clientId === clientId, "unexpected Creator scope"), "Automation Auto status", () =>
     http.get(`${budgetPath(clientId)}/auto/status`, { signal }),
   );
+}
+
+export function fetchBudgetAutoOverviewStatus(clientId: BudgetCapClientId, signal?: AbortSignal) {
+  return request(budgetAutoStatusSchema.refine((value) => value.clientId === clientId && value.overviewState !== undefined, "unexpected Creator overview scope"),
+    "Automation Auto overview status", () => http.get(`${budgetPath(clientId)}/auto/status`, { signal, params: { view: "summary" } }));
 }
 
 export function fetchAdditionalBudgetCapStatus(clientId: AdditionalBudgetCapClientId, signal?: AbortSignal) {
