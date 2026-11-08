@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
 import { armBudgetAuto, armPpanBudgetAutoContinuous, fetchBudgetAutoStatus, stopBudgetAuto, stopPpanBudgetAutoContinuous,
-  type BudgetAutoArmInput, type BudgetAutoContinuousArmInput, type BudgetAutoStatus, type BudgetCapClientId } from "@/api/automationBudget";
+  type BudgetAutoArmInput, type BudgetAutoSpendTrendArmInput, type BudgetAutoVerifiedContinuousArmInput, type BudgetAutoStatus,
+  type BudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,8 +15,11 @@ import { formatBudgetBaht } from "@/lib/automationBudget";
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, dateStyle: "medium", timeStyle: "short" });
 const blockers = new Map([
   ["NATIVE_AUTO_UNVERIFIED", "ยังยืนยันไม่ได้ว่า Auto Budget ของ TikTok ปิดอยู่"],
+  ["NATIVE_AUTO_CONFLICT", "พักการเพิ่มงบ เพราะพบว่า Auto Budget ของ TikTok เปิดอยู่หรือข้อมูลขัดกัน"],
   ["SPEND_WATERMARK_MISSING", "รายงานไม่ระบุว่ายอดใช้เป็นข้อมูลถึงเวลาใด"],
   ["SPEND_UPDATE_PENDING", "รอยอดใช้จาก TikTok ที่ใหม่พอสำหรับตรวจเกณฑ์"],
+  ["SPEND_TREND_PENDING", "รอให้ยอดใช้เพิ่มขึ้นจากรอบก่อนก่อนส่งคำสั่ง"],
+  ["SPEND_TREND_UNAVAILABLE", "ยังอ่านยอดใช้ของแคมเปญเพื่อเทียบกับรอบก่อนไม่ได้"],
   ["LIVE_DELIVERY_UNVERIFIED", "ยังยืนยันไม่ได้ว่ากำลังไลฟ์และแคมเปญกำลังส่งโฆษณา"],
   ["LINE_NOT_READY", "ยังไม่พร้อมส่งแจ้งเตือนทาง LINE สำหรับ Creator นี้"],
   ["WRITE_LOCKED", "มีรายการปรับงบที่ยังต้องตรวจผลก่อนเริ่มรายการใหม่"],
@@ -61,15 +65,23 @@ const continuousReasons = new Map([
 ]);
 const continuousRule = "ไม่จำกัดจำนวนครั้ง แต่ไม่เกินเพดานงบ · คำนวณจากงบปัจจุบันใหม่ทุกครั้ง";
 const continuousStopRule = "หยุดเมื่อไม่พบแคมเปญที่เปิด Auto ไว้ หรือ LIVE จบหรือเปลี่ยนห้อง · กดหยุดเองได้";
+const spendTrendRule = "เทียบยอดใช้จาก TikTok ทุก 1 นาที · เพิ่มได้เมื่อยอดใช้เพิ่มจากรอบก่อนเท่านั้น";
+const spendTrendStopRule = "พักเมื่อยอดไม่เพิ่มหรืออ่านข้อมูลไม่ได้ · หยุดเมื่อไม่พบแคมเปญเดิม หรือกดหยุดเอง";
+const spendTrendCaveat = "ยอดใช้ที่เพิ่มขึ้นเป็นสัญญาณแทนการยืนยัน LIVE และอาจมาจากข้อมูลที่รายงานล่าช้า";
 const numericId = /^[1-9]\d{5,30}$/;
 const isNumericId = (value: string | null | undefined): value is string => typeof value === "string" && numericId.test(value);
 
 type AutoAttestation = "nativeAutoOff" | "noConcurrentChanges";
 type AutoDraft = { strategy: "one-shot"; input: Omit<BudgetAutoArmInput, AutoAttestation> }
-  | { strategy: "continuous"; input: Omit<BudgetAutoContinuousArmInput, AutoAttestation> };
+  | { strategy: "continuous"; evidenceMode: "verified-live"; input: Omit<BudgetAutoVerifiedContinuousArmInput, AutoAttestation> }
+  | { strategy: "continuous"; evidenceMode: "spend-trend"; input: BudgetAutoSpendTrendArmInput };
 
 function isContinuous(data: BudgetAutoStatus): boolean {
   return data.clientId === PILOT_BUDGET_CLIENT_ID && data.strategy === "continuous";
+}
+
+function usesSpendTrend(data: BudgetAutoStatus): boolean {
+  return isContinuous(data) && data.evidenceMode === "spend-trend";
 }
 
 function statusUnavailable(error: unknown): boolean {
@@ -93,9 +105,10 @@ function currentPreview(data: BudgetAutoStatus, campaignId: string | null, now: 
 /** The server's explicit capability is necessary, including when spend is below threshold. */
 export function getAutoArmPreview(data: BudgetAutoStatus, campaignId: string | null, now: number) {
   if (data.mode !== "live" || data.canArm !== true || data.blockers.length || data.grant !== null || data.canStop === true) return null;
-  if ((data.strategy === "continuous" && !isContinuous(data)) || (data.continuousSession && (!isContinuous(data) || data.continuousSession.status !== "STOPPED"))) return null;
+  if ((data.evidenceMode === "spend-trend" && !usesSpendTrend(data)) || (data.strategy === "continuous" && !isContinuous(data))
+    || (data.continuousSession && (!isContinuous(data) || data.continuousSession.status !== "STOPPED"))) return null;
   const preview = currentPreview(data, campaignId, now, 45_000);
-  return preview && isNumericId(preview.campaignId) && (!isContinuous(data) || isNumericId(preview.liveSessionId))
+  return preview && isNumericId(preview.campaignId) && (!isContinuous(data) || usesSpendTrend(data) || isNumericId(preview.liveSessionId))
     && (preview.status === "BELOW_THRESHOLD" || preview.status === "WOULD_INCREASE") ? preview : null;
 }
 
@@ -108,11 +121,13 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
   const preview = currentPreview(data, campaignId, now, 180_000);
   const reasons = [...new Set(data.blockers.map((code) => blockers.get(code) ?? "มีเงื่อนไขความปลอดภัยที่ยังไม่ผ่าน"))];
   const continuous = isContinuous(data);
+  const spendTrend = usesSpendTrend(data);
   const session = continuous ? data.continuousSession : null;
   const sessionReason = session?.reason ? continuousReasons.get(session.reason) ?? blockers.get(session.reason) ?? previews.get(session.reason) ?? "ระบบยังไม่ยืนยันเงื่อนไขให้เพิ่มงบ" : null;
   return <>
     <Badge variant="outline" className="mt-2 whitespace-normal">{continuous && data.mode === "live" ? "โหมดจริง · ทำงานเมื่อเปิด Auto และเข้าเกณฑ์" : modeLabels[data.mode]}</Badge>
-    {continuous && <p className="mt-2 text-xs text-muted-foreground">Auto ต่อเนื่อง · {continuousRule} · {continuousStopRule}</p>}
+    {continuous && <p className="mt-2 text-xs text-muted-foreground">Auto ต่อเนื่อง · {continuousRule} · {spendTrend ? spendTrendStopRule : continuousStopRule}</p>}
+    {spendTrend && <p className="mt-2 text-xs text-muted-foreground">{spendTrendRule} · {spendTrendCaveat}</p>}
     {session && <p className="mt-2 text-xs text-muted-foreground">สถานะ Auto ต่อเนื่อง: {continuousLabels[session.status]} · เริ่ม {time.format(new Date(session.startedAt))} (เวลาไทย){sessionReason ? ` · ${sessionReason}` : ""}</p>}
     {data.grant && <p className="mt-2 text-xs text-muted-foreground">รอบ Auto: {grantLabels.get(data.grant.status) ?? "ดูสถานะจากระบบ"} · สิ้นสุดตามกำหนด {time.format(new Date(data.grant.expiresAt))} (เวลาไทย)</p>}
     {preview ? <div className="mt-3 space-y-2">
@@ -154,6 +169,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   const needsFreshRead = lastAttemptAt !== null && dataUpdatedAt <= lastAttemptAt;
   const preview = data.clientId === clientId ? getAutoArmPreview(data, campaignId, Date.now()) : null;
   const continuous = isContinuous(data);
+  const spendTrend = usesSpendTrend(data);
   const session = continuous ? data.continuousSession : null;
   const canStop = data.clientId === clientId && data.canStop === true;
   const stopSessionId = canStop && session && session.status !== "STOPPED" ? session.sessionId : null;
@@ -161,12 +177,15 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   const stopId = stopSessionId ?? stopGrantId;
   const durationMinutes = /^\d{2,3}$/.test(duration) ? Number(duration) : NaN;
   const durationValid = Number.isSafeInteger(durationMinutes) && durationMinutes >= 10 && durationMinutes <= 120;
+  const spendTrendDraft = draft?.strategy === "continuous" && draft.evidenceMode === "spend-trend";
+  const attestationComplete = spendTrendDraft || (nativeOff && exclusive);
 
   function matchesDraft() {
     const latest = data.clientId === clientId ? getAutoArmPreview(data, campaignId, Date.now()) : null;
     return !!latest && !!draft && (draft.strategy === "continuous") === continuous && latest.campaignId === draft.input.expectedCampaignId
       && latest.currentBudgetMinor === draft.input.expectedBudgetMinor && latest.policyRevision === draft.input.expectedPolicyRevision
-      && (draft.strategy !== "continuous" || latest.liveSessionId === draft.input.expectedLiveSessionId);
+      && (draft.strategy !== "continuous" || (draft.evidenceMode === "spend-trend"
+        ? spendTrend : !spendTrend && latest.liveSessionId === draft.input.expectedLiveSessionId));
   }
 
   function review(event: FormEvent<HTMLFormElement>) {
@@ -178,20 +197,23 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
     const input = { expectedCampaignId: preview.campaignId, expectedBudgetMinor: preview.currentBudgetMinor,
       expectedPolicyRevision: preview.policyRevision };
     if (continuous) {
-      if (!isNumericId(preview.liveSessionId)) return;
-      setDraft({ strategy: "continuous", input: { ...input, expectedLiveSessionId: preview.liveSessionId } });
+      if (spendTrend) setDraft({ strategy: "continuous", evidenceMode: "spend-trend", input: { ...input, evidenceMode: "spend-trend" } });
+      else if (isNumericId(preview.liveSessionId)) {
+        setDraft({ strategy: "continuous", evidenceMode: "verified-live", input: { ...input, expectedLiveSessionId: preview.liveSessionId } });
+      }
     } else setDraft({ strategy: "one-shot", input: { ...input, durationMinutes } });
   }
 
   async function confirm() {
-    if (busy.current || needsFreshRead || !draft || !nativeOff || !exclusive || !matchesDraft()) return;
+    if (busy.current || needsFreshRead || !draft || !attestationComplete || !matchesDraft()) return;
     busy.current = true;
     setPending("arm");
     setNotice("");
     setLastAttemptAt(dataUpdatedAt);
     try {
       if (draft.strategy === "continuous") {
-        const session = await armPpanBudgetAutoContinuous({ ...draft.input, nativeAutoOff: true, noConcurrentChanges: true });
+        const session = await armPpanBudgetAutoContinuous(draft.evidenceMode === "spend-trend" ? draft.input
+          : { ...draft.input, nativeAutoOff: true, noConcurrentChanges: true });
         setNotice(`บันทึกการเปิด Auto ต่อเนื่องแล้ว · เริ่ม ${time.format(new Date(session.startedAt))} (เวลาไทย) · ยังไม่ยืนยันว่าเพิ่มงบ`);
       } else {
         const grant = await armBudgetAuto(clientId, { ...draft.input, nativeAutoOff: true, noConcurrentChanges: true });
@@ -237,12 +259,16 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
     {draft ? <div className="space-y-2">
       <p className="font-medium">{draft.strategy === "continuous" ? "เปิด Auto ต่อเนื่องสำหรับแคมเปญนี้ทันที" : `เปิด Auto สำหรับแคมเปญนี้ทันที ${draft.input.durationMinutes} นาที`}</p>
       <p className="text-xs text-muted-foreground">ฐานงบ {formatBudgetBaht(draft.input.expectedBudgetMinor)} · {draft.strategy === "continuous" ? continuousRule : "เพิ่มได้สูงสุดหนึ่งครั้งเมื่อเข้าเกณฑ์"} · ใช้เงินจริง</p>
-      {draft.strategy === "continuous" && <p className="text-xs text-muted-foreground">LIVE ID <span className="tabular break-all">{draft.input.expectedLiveSessionId}</span> · {continuousStopRule}</p>}
-      {!matchesDraft() && <p role="status" className="text-xs text-muted-foreground">{draft.strategy === "continuous" ? "ข้อมูลแคมเปญ ห้อง LIVE งบ เพดาน หรือสิทธิ์เปลี่ยนแล้ว กรุณาเริ่มตรวจใหม่" : "ข้อมูลงบ เพดาน หรือสิทธิ์เปลี่ยนแล้ว กรุณาเริ่มตรวจใหม่"}</p>}
-      <label className="flex items-start gap-2"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-primary" checked={nativeOff} disabled={pending !== null || !matchesDraft()} onChange={(event) => setNativeOff(event.target.checked)} />ปิด Auto Budget ของ TikTok แล้ว</label>
-      <label className="flex items-start gap-2"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-primary" checked={exclusive} disabled={pending !== null || !matchesDraft()} onChange={(event) => setExclusive(event.target.checked)} />ไม่มีคนหรือระบบอื่นแก้งบพร้อมกันในช่วงนี้</label>
+      {draft.strategy === "continuous" && (draft.evidenceMode === "spend-trend"
+        ? <p className="text-xs text-muted-foreground">{spendTrendRule} · {spendTrendCaveat} · เริ่มได้แม้ไม่ทราบสถานะ Auto Budget ของ TikTok แต่จะพักหากพบว่ากำลังเปิดอยู่</p>
+        : <p className="text-xs text-muted-foreground">LIVE ID <span className="tabular break-all">{draft.input.expectedLiveSessionId}</span> · {continuousStopRule}</p>)}
+      {!matchesDraft() && <p role="status" className="text-xs text-muted-foreground">{draft.strategy === "continuous" && draft.evidenceMode === "verified-live" ? "ข้อมูลแคมเปญ ห้อง LIVE งบ เพดาน หรือสิทธิ์เปลี่ยนแล้ว กรุณาเริ่มตรวจใหม่" : "ข้อมูลแคมเปญ งบ เพดาน หรือสิทธิ์เปลี่ยนแล้ว กรุณาเริ่มตรวจใหม่"}</p>}
+      {!spendTrendDraft && <>
+        <label className="flex items-start gap-2"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-primary" checked={nativeOff} disabled={pending !== null || !matchesDraft()} onChange={(event) => setNativeOff(event.target.checked)} />ปิด Auto Budget ของ TikTok แล้ว</label>
+        <label className="flex items-start gap-2"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-primary" checked={exclusive} disabled={pending !== null || !matchesDraft()} onChange={(event) => setExclusive(event.target.checked)} />ไม่มีคนหรือระบบอื่นแก้งบพร้อมกันในช่วงนี้</label>
+      </>}
       <div className="flex flex-wrap gap-2">
-        <Button type="button" className="min-h-10" disabled={!matchesDraft() || !nativeOff || !exclusive || pending !== null || needsFreshRead} onClick={() => void confirm()}>{pending === "arm" ? "กำลังเปิด Auto…" : draft.strategy === "continuous" ? "ยืนยันเปิด Auto ต่อเนื่อง ใช้เงินจริง" : "ยืนยันเปิด Auto ใช้เงินจริง"}</Button>
+        <Button type="button" className="min-h-10" disabled={!matchesDraft() || !attestationComplete || pending !== null || needsFreshRead} onClick={() => void confirm()}>{pending === "arm" ? "กำลังเปิด Auto…" : draft.strategy === "continuous" ? "ยืนยันเปิด Auto ต่อเนื่อง ใช้เงินจริง" : "ยืนยันเปิด Auto ใช้เงินจริง"}</Button>
         <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null} onClick={() => setDraft(null)}>ยกเลิก</Button>
       </div>
     </div> : preview && <form className="space-y-2" onSubmit={review}>

@@ -76,6 +76,7 @@ export const budgetAutoStatusSchema = z.object({
   clientId: z.enum(budgetIds),
   mode: z.enum(["disabled", "shadow", "live"]),
   strategy: z.enum(["continuous", "one-shot"]).optional(),
+  evidenceMode: z.literal("spend-trend").optional(),
   grant: z.object({ grantId: operationId, status: autoStatusCode, expiresAt: instant }).nullable(),
   continuousSession: z.object({
     sessionId: operationId,
@@ -89,16 +90,22 @@ export const budgetAutoStatusSchema = z.object({
   canStop: z.boolean().optional(),
 }).refine((value) => value.strategy !== "continuous" || value.clientId === PILOT_BUDGET_CLIENT_ID,
 "continuous Auto is Ppan-only").refine((value) => value.continuousSession == null
-  || (value.clientId === PILOT_BUDGET_CLIENT_ID && value.strategy === "continuous"), "invalid continuous Auto session scope");
+  || (value.clientId === PILOT_BUDGET_CLIENT_ID && value.strategy === "continuous"), "invalid continuous Auto session scope")
+  .refine((value) => value.evidenceMode !== "spend-trend" || (value.clientId === PILOT_BUDGET_CLIENT_ID && value.strategy === "continuous"),
+    "spend-trend Auto is Ppan continuous-only");
 
-const budgetAutoBaseArmInputSchema = z.object({
+const budgetAutoExactArmInputSchema = z.object({
   expectedCampaignId: tiktokNumericId,
   expectedBudgetMinor: positiveMinor,
   expectedPolicyRevision: positiveMinor,
+}).strict();
+const budgetAutoBaseArmInputSchema = budgetAutoExactArmInputSchema.extend({
   nativeAutoOff: z.literal(true),
   noConcurrentChanges: z.literal(true),
-}).strict();
-const budgetAutoContinuousArmInputSchema = budgetAutoBaseArmInputSchema.extend({ expectedLiveSessionId: tiktokNumericId });
+});
+const budgetAutoVerifiedContinuousArmInputSchema = budgetAutoBaseArmInputSchema.extend({ expectedLiveSessionId: tiktokNumericId });
+const budgetAutoSpendTrendArmInputSchema = budgetAutoExactArmInputSchema.extend({ evidenceMode: z.literal("spend-trend") });
+const budgetAutoContinuousArmInputSchema = z.union([budgetAutoVerifiedContinuousArmInputSchema, budgetAutoSpendTrendArmInputSchema]);
 const budgetAutoArmInputSchema = budgetAutoBaseArmInputSchema.extend({ durationMinutes: z.number().int().min(10).max(120) });
 const budgetAutoArmResultSchema = z.object({ grantId: operationId, expiresAt: instant });
 const budgetAutoContinuousArmResultSchema = z.object({ sessionId: operationId, startedAt: instant });
@@ -148,6 +155,8 @@ export type BudgetCapStatus = Pick<AutomationBudgetStatus, "clientId" | "cap" | 
 export type BudgetAutoStatus = z.infer<typeof budgetAutoStatusSchema>;
 export type BudgetAutoArmInput = z.infer<typeof budgetAutoArmInputSchema>;
 export type BudgetAutoContinuousArmInput = z.infer<typeof budgetAutoContinuousArmInputSchema>;
+export type BudgetAutoVerifiedContinuousArmInput = z.infer<typeof budgetAutoVerifiedContinuousArmInputSchema>;
+export type BudgetAutoSpendTrendArmInput = z.infer<typeof budgetAutoSpendTrendArmInputSchema>;
 export type BudgetPrepareInput = {
   expectedCampaignId: string;
   expectedBudgetMinor: number;

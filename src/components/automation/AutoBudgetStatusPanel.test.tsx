@@ -32,6 +32,9 @@ const continuous = {
   preview: { ...status.preview, campaignId: sampleNumericCampaign, liveSessionId: sampleLiveSessionId },
   continuousSession: null,
 } satisfies BudgetAutoStatus;
+const spendTrend = {
+  ...continuous, evidenceMode: "spend-trend", preview: { ...continuous.preview, liveSessionId: null },
+} satisfies BudgetAutoStatus;
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -182,5 +185,38 @@ describe("Ppan continuous Auto", () => {
     expect(post.mock.calls).toEqual([
       ["/automation/budget/auto/arm", input], ["/automation/budget/auto/stop", { sessionId }],
     ]);
+  });
+
+  it("uses a live spend-trend review only for the exact Ppan campaign and explains the proxy", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const props = { campaignId: sampleNumericCampaign, clientId: PILOT_BUDGET_CLIENT_ID, dataUpdatedAt: now, refresh: async () => null } as const;
+    expect(budgetAutoStatusSchema.safeParse(spendTrend).success).toBe(true);
+    expect(budgetAutoStatusSchema.safeParse({ ...spendTrend, clientId: NNSHOP_CAP_CLIENT_ID, strategy: "one-shot" }).success).toBe(false);
+    expect(budgetAutoStatusSchema.safeParse({ ...spendTrend, strategy: "one-shot" }).success).toBe(false);
+    expect(getAutoArmPreview(spendTrend, sampleNumericCampaign, now)).toEqual(spendTrend.preview);
+    expect(getAutoArmPreview({ ...spendTrend, evidenceMode: undefined }, sampleNumericCampaign, now)).toBeNull();
+    expect(getAutoArmPreview(spendTrend, null, now)).toBeNull();
+    expect(getAutoArmPreview({ ...spendTrend, blockers: ["NATIVE_AUTO_CONFLICT"] }, sampleNumericCampaign, now)).toBeNull();
+    expect(renderToStaticMarkup(<AutoBudgetControls {...props} data={spendTrend} />)).toContain("ตรวจเงื่อนไขก่อนเปิด Auto ต่อเนื่อง");
+    const waiting = { ...spendTrend, canArm: false, canStop: true, blockers: ["SPEND_TREND_PENDING"],
+      continuousSession: { sessionId, startedAt: observedAt, status: "ARMED", reason: null } } satisfies BudgetAutoStatus;
+    const html = renderToStaticMarkup(<AutoBudgetStatusBody data={waiting} campaignId={sampleNumericCampaign} now={now} />);
+    expect(html).toContain("เทียบยอดใช้จาก TikTok ทุก 1 นาที");
+    expect(html).toContain("สัญญาณแทนการยืนยัน LIVE");
+    expect(html).toContain("รอให้ยอดใช้เพิ่มขึ้นจากรอบก่อนก่อนส่งคำสั่ง");
+    expect(html).not.toContain("LIVE จบหรือเปลี่ยนห้อง");
+    expect(renderToStaticMarkup(<AutoBudgetControls {...props} data={waiting} />)).toContain("หยุด Auto ต่อเนื่อง");
+  });
+
+  it("sends only the exact Ppan spend-trend authorization without invented confirmations", async () => {
+    const input = { expectedCampaignId: sampleNumericCampaign, expectedBudgetMinor: 800_000,
+      expectedPolicyRevision: 2, evidenceMode: "spend-trend" } as const;
+    const post = vi.spyOn(http, "post").mockResolvedValueOnce({ data: { sessionId, startedAt: observedAt } });
+    await expect(armPpanBudgetAutoContinuous(input)).resolves.toEqual({ sessionId, startedAt: observedAt });
+    const withRoom = { ...input, expectedLiveSessionId: sampleLiveSessionId };
+    const withAttestation = { ...input, nativeAutoOff: true, noConcurrentChanges: true };
+    await expect(armPpanBudgetAutoContinuous(withRoom)).rejects.toThrow();
+    await expect(armPpanBudgetAutoContinuous(withAttestation)).rejects.toThrow();
+    expect(post.mock.calls).toEqual([["/automation/budget/auto/arm", input]]);
   });
 });
