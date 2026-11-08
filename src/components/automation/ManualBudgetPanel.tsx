@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, LockKeyhole, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
@@ -7,9 +7,9 @@ import { ApiError } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { BANGKOK } from "@/lib/automation";
+import { BANGKOK, isFreshAutomationClient } from "@/lib/automation";
 import { budgetResultMatches, canConfirmBudget, canPrepareBudget, formatBudgetBaht as money, freshBudgetCap, isTerminalBudgetResult, parseBudgetBaht, preparationMatchesRequest, validDirection, type BudgetDirection } from "@/lib/automationBudget";
-import { AdditionalBudgetCapPanel, BudgetCapEditor } from "./BudgetCapEditor";
+import { AdditionalBudgetCapPanel, BudgetCapEditor, CampaignAmountField } from "./BudgetCapEditor";
 
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, timeStyle: "medium" });
 const formatTime = (value: string) => time.format(new Date(value));
@@ -96,18 +96,22 @@ export function BudgetOutcome({ operationId, result }: { operationId: string; re
   );
 }
 
-export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active = true, clientId = PILOT_BUDGET_CLIENT_ID }: {
+export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active = true, clientId = PILOT_BUDGET_CLIENT_ID, variant, renderBetweenBudgetAndCeiling }: {
   userId: number;
   clients: AutomationClient[];
   onRefreshCampaign: () => void;
   active?: boolean;
   clientId?: BudgetCapClientId;
+  variant?: "campaign-form";
+  renderBetweenBudgetAndCeiling?: (blockAutoStart: boolean) => ReactNode;
 }) {
   const titleId = useId();
+  const ceilingTitleId = useId();
   const inputId = useId();
   const [now, setNow] = useState(Date.now);
   const [direction, setDirection] = useState<BudgetDirection | null>(null);
   const [amount, setAmount] = useState("");
+  const [inlineDraft, setInlineDraft] = useState<{ amount: string; campaignId: string; budgetMinor: number } | null>(null);
   const [review, setReview] = useState<AutomationBudgetPreparation | null>(null);
   const [nativeOff, setNativeOff] = useState(false);
   const [noConcurrentChanges, setNoConcurrentChanges] = useState(false);
@@ -118,10 +122,11 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
   const [editingCap, setEditingCap] = useState(false);
   const busy = useRef(false);
   const attemptedOperation = useRef(operationId);
+  const compact = variant === "campaign-form";
   const query = useQuery({
     queryKey: ["automation", CAP_QUERY_KEY, userId, clientId],
     queryFn: ({ signal }) => fetchBudgetStatus(signal, clientId),
-    enabled: active,
+    enabled: active || (compact && clientId === PILOT_BUDGET_CLIENT_ID),
     gcTime: 0,
     retry: false,
     staleTime: 0,
@@ -136,23 +141,26 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
   const enabled = active && allowedMode && canPrepareBudget(status, client, now);
   const visibleMode = clientId === PILOT_BUDGET_CLIENT_ID && allowedMode ? status?.mode ?? "disabled" : enabled ? "live" : "disabled";
   const cap = client && freshBudgetCap(status, now) ? status?.cap ?? null : null;
+  const currentBudget = client && isFreshAutomationClient(client, now) ? campaign?.dailyBudgetMinor ?? null : null;
+  const inlineDraftMatches = !inlineDraft || (inlineDraft.campaignId === campaign?.campaignId && inlineDraft.budgetMinor === campaign.dailyBudgetMinor);
   const readyToConfirm = active && allowedMode && !!review && canConfirmBudget(review, status, client, now);
   const terminal = result !== null && isTerminalBudgetResult(result.status);
   const actualMode = review?.mode === "live";
   const displayName = client?.displayName ?? (clientId === PILOT_BUDGET_CLIENT_ID ? "Ppan" : clientId);
-  const capEditorBlocked = !!operationId || !!review || pending !== null;
+  const capEditorBlocked = !!operationId || !!review || pending !== null || (compact && inlineDraft !== null);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active && !compact) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [active]);
+  }, [active, compact]);
 
   function clearDraft() {
     setReview(null);
     setDirection(null);
     setAmount("");
+    setInlineDraft(null);
     setNativeOff(false);
     setNoConcurrentChanges(false);
     setErrorText(null);
@@ -171,11 +179,13 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
 
   async function prepare(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!active || !allowedMode || busy.current || editingCap || attemptedOperation.current || review || !status || !campaign || !direction || !canPrepareBudget(status, client, Date.now())) return;
-    const target = parseBudgetBaht(amount);
+    if (!active || !allowedMode || busy.current || editingCap || attemptedOperation.current || review || !status || !campaign || !canPrepareBudget(status, client, Date.now())) return;
+    if (compact ? (!inlineDraft || !inlineDraftMatches) : !direction) return;
+    const target = parseBudgetBaht(compact ? inlineDraft?.amount ?? "" : amount);
     if (target === null) { setErrorText("กรอกงบเป็นบาทมากกว่า 0 และไม่เกิน 2 ตำแหน่งทศนิยม"); return; }
-    if (!validDirection(target, campaign.dailyBudgetMinor, direction)) {
-      setErrorText(direction === "increase" ? "งบใหม่ต้องมากกว่างบปัจจุบัน" : "งบใหม่ต้องน้อยกว่างบปัจจุบัน"); return;
+    const intendedDirection = compact ? (target > campaign.dailyBudgetMinor ? "increase" : "decrease") : direction;
+    if (!intendedDirection || !validDirection(target, campaign.dailyBudgetMinor, intendedDirection)) {
+      setErrorText(compact ? "งบใหม่ต้องต่างจากงบปัจจุบัน" : direction === "increase" ? "งบใหม่ต้องมากกว่างบปัจจุบัน" : "งบใหม่ต้องน้อยกว่างบปัจจุบัน"); return;
     }
     if (!status.cap || target > status.cap.campaignCapMinor) { setErrorText("งบใหม่เกินเพดานแคมเปญ"); return; }
     if (campaign.spendMinor !== null && target <= campaign.spendMinor) {
@@ -260,27 +270,28 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
     clearDraft();
   }
 
-  return (
-    <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-labelledby={titleId}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 id={titleId} className="flex items-center gap-2 text-base font-semibold"><SlidersHorizontal className="h-4 w-4" aria-hidden /> ปรับงบจากเว็บ</h2>
-          <p className="mt-1 text-sm text-muted-foreground">ตรวจเพดานและยืนยันทีละรายการสำหรับ {displayName} · LINE ใช้แจ้งเตือน ไม่ใช้สั่งปรับงบ</p>
-        </div>
-        <Badge variant={visibleMode === "live" ? "warning" : "secondary"}>
-          {visibleMode === "live" ? "โหมดส่งคำสั่งจริง" : visibleMode === "dry-run" ? "ทดลอง · ไม่แก้งบจริง" : "ยังไม่เปิดสิทธิ์สั่งงาน"}
-        </Badge>
-      </div>
+  const ceilingEditor = isAdditionalBudgetCapClientId(clientId) ? (
+    <AdditionalBudgetCapPanel active={active} userId={userId} clientId={clientId} displayName={displayName} blocked={capEditorBlocked}
+      onEditingChange={editCap} refreshBudgetStatus={query.refetch} variant={variant} />
+  ) : <BudgetCapEditor active={active} clientId={PILOT_BUDGET_CLIENT_ID} displayName={displayName}
+    status={client ? status : null} loading={query.isPending} refreshStatus={query.refetch}
+    blocked={capEditorBlocked} onEditingChange={editCap} variant={variant} />;
 
-      <div className="mt-4">
-        {isAdditionalBudgetCapClientId(clientId) ? (
-          <AdditionalBudgetCapPanel active={active} userId={userId} clientId={clientId} displayName={displayName} blocked={capEditorBlocked} onEditingChange={editCap} refreshBudgetStatus={query.refetch} />
-        ) : <BudgetCapEditor active={active} clientId={PILOT_BUDGET_CLIENT_ID} displayName={displayName}
-          status={client ? status : null} loading={query.isPending} refreshStatus={query.refetch}
-          blocked={capEditorBlocked} onEditingChange={editCap} />}
-      </div>
+  function inlineAmountField(editable = false) {
+    return <>
+      <label htmlFor={inputId} className="sr-only">Daily budget (THB)</label>
+      <CampaignAmountField id={inputId} autoComplete="off" maxLength={25} placeholder="—"
+        value={editable && inlineDraft ? inlineDraft.amount : currentBudget === null ? "" : money(currentBudget).slice(1)}
+        readOnly={!editable || !enabled || pending !== null || !inlineDraftMatches}
+        onChange={editable ? (event) => {
+          if (!enabled || !campaign || !inlineDraftMatches || busy.current) return;
+          setErrorText(null);
+          setInlineDraft({ amount: event.target.value, campaignId: campaign.campaignId, budgetMinor: campaign.dailyBudgetMinor });
+        } : undefined} />
+    </>;
+  }
 
-      {operationId ? (
+  const budgetEditor = operationId ? (
         <div className="mt-4 space-y-2">
           {pending === "confirm" ? <p role="status" className="text-sm">กำลังตรวจและรอผลของรายการนี้…</p> : <BudgetOutcome operationId={operationId} result={result} />}
           {!terminal ? (
@@ -306,6 +317,21 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
             <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null} onClick={clearDraft}>ปิดแบบร่าง</Button>
           </div>
         </div>
+      ) : !editingCap && compact ? (
+        <form onSubmit={(event) => void prepare(event)} className="space-y-2">
+          {inlineAmountField(true)}
+          {!enabled && <p className="text-xs text-muted-foreground">
+            {!active ? "Sync บัญชีนี้ก่อนแก้งบ" : cap?.locked ? "มีรายการที่ยังต้องตรวจสอบ จึงยังไม่เปิดให้แก้งบอีกครั้ง" : status?.mode === "disabled" ? "บัญชีนี้ยังไม่ได้เปิดสิทธิ์สั่งปรับงบ" : "ต้องยืนยันสิทธิ์ แคมเปญ ยอดใช้ และเพดานล่าสุดก่อน"}
+          </p>}
+          {inlineDraft && <>
+            {!inlineDraftMatches && <p role="status" className="text-xs text-muted-foreground">แคมเปญหรืองบปัจจุบันเปลี่ยนแล้ว กรุณายกเลิกและกรอกใหม่</p>}
+            <div className="flex flex-wrap gap-2">
+              <Button type="submit" className="min-h-10" disabled={!enabled || !inlineDraftMatches || pending !== null || !inlineDraft.amount.trim()}>{pending === "prepare" ? "กำลังตรวจข้อมูล…" : "ตรวจงบใหม่"}</Button>
+              <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null} onClick={clearDraft}>ยกเลิกแก้งบ</Button>
+            </div>
+            <p className="text-xs text-muted-foreground">ยังไม่ส่งคำสั่งให้ TikTok จนกว่าจะยืนยันรายการ</p>
+          </>}
+        </form>
       ) : !editingCap ? (
         <div className="mt-4 space-y-3">
           {!enabled && <p className="flex items-start gap-2 text-xs text-muted-foreground"><LockKeyhole className="mt-px h-4 w-4 shrink-0" aria-hidden />{cap?.locked ? "มีรายการที่ยังต้องตรวจสอบ จึงยังไม่เปิดให้ปรับงบอีกครั้ง" : status?.mode === "disabled" ? "บัญชีนี้ยังไม่ได้เปิดสิทธิ์สั่งปรับงบ" : "ต้องยืนยันสิทธิ์ แคมเปญปัจจุบัน ยอดใช้ และเพดานล่าสุดก่อน"}</p>}
@@ -328,8 +354,44 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
             </form>
           )}
         </div>
-      ) : null}
-      {errorText && <p role="alert" className="mt-3 break-words text-sm text-destructive">{errorText}</p>}
+      ) : null;
+  const error = errorText && <p role="alert" className="mt-3 break-words text-sm text-destructive">{errorText}</p>;
+
+  if (compact) return <>
+    <section className="min-w-0 space-y-2.5 rounded-lg border border-border bg-card p-3.5 sm:p-4" aria-labelledby={titleId}>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 id={titleId} className="text-base font-semibold">Daily budget</h3>
+        {allowedMode && status?.mode === "dry-run" && <Badge variant="secondary">ทดลอง · ไม่แก้งบจริง</Badge>}
+      </div>
+      {(operationId || review || editingCap) && inlineAmountField()}
+      {editingCap && <p className="text-xs text-muted-foreground">ปิดรายการแก้เพดานก่อนแก้งบ</p>}
+      {budgetEditor}
+      {error}
+    </section>
+    {renderBetweenBudgetAndCeiling?.(capEditorBlocked || editingCap)}
+    <section className="min-w-0 space-y-2.5 rounded-lg border border-border bg-card p-3.5 sm:p-4" aria-labelledby={ceilingTitleId}>
+      <div>
+        <h3 id={ceilingTitleId} className="text-base font-semibold">Daily Ceiling</h3>
+        <p className="mt-1 text-xs text-muted-foreground">เพดานคุมงบรวมต่อวันของ Creator นี้ ไม่ใช่งบที่ส่งให้ TikTok</p>
+      </div>
+      {ceilingEditor}
+    </section>
+  </>;
+
+  return (
+    <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-labelledby={titleId}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id={titleId} className="flex items-center gap-2 text-base font-semibold"><SlidersHorizontal className="h-4 w-4" aria-hidden /> ปรับงบจากเว็บ</h2>
+          <p className="mt-1 text-sm text-muted-foreground">ตรวจเพดานและยืนยันทีละรายการสำหรับ {displayName} · LINE ใช้แจ้งเตือน ไม่ใช้สั่งปรับงบ</p>
+        </div>
+        <Badge variant={visibleMode === "live" ? "warning" : "secondary"}>
+          {visibleMode === "live" ? "โหมดส่งคำสั่งจริง" : visibleMode === "dry-run" ? "ทดลอง · ไม่แก้งบจริง" : "ยังไม่เปิดสิทธิ์สั่งงาน"}
+        </Badge>
+      </div>
+      <div className="mt-4">{ceilingEditor}</div>
+      {budgetEditor}
+      {error}
     </section>
   );
 }

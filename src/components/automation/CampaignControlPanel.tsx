@@ -40,13 +40,18 @@ export function parseCampaignRoiTenths(text: string): number | null {
 }
 
 /** Confirmation only for a live, explicitly reviewed Ppan operation. */
-export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCampaignId, onVerified }: {
+export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCampaignId, onVerified, layout = "default", fallbackRoi = null }: {
   userId: number; actionsEnabled?: boolean; syncedCampaignId?: string | null; onVerified?: (action: CampaignControlAction) => void;
+  layout?: "default" | "roi-field"; fallbackRoi?: number | null;
 }) {
   const heading = useId();
   const input = useId();
+  const description = useId();
+  const isRoiField = layout === "roi-field";
+  const canReadDetails = !isRoiField || (actionsEnabled && syncedCampaignId !== undefined);
   const [action, setAction] = useState<CampaignControlAction | null>(null);
   const [target, setTarget] = useState("");
+  const [roiDraft, setRoiDraft] = useState<{ campaignId: string; value: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [preview, setPreview] = useState<CampaignActionPreview | null>(null);
   const [pending, setPending] = useState(false);
@@ -59,16 +64,24 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
   const result = useQuery({
     queryKey: ["automation", "campaign-control", userId],
     queryFn: ({ signal }) => fetchCampaignControlStatus(signal),
+    enabled: canReadDetails,
     gcTime: 0, retry: false, staleTime: 0, refetchInterval: (query) => blockedRequest(query.state.error) ? false : 30_000,
   });
-  const data = result.isSuccess ? result.data : null;
+  const data = canReadDetails && result.isSuccess ? result.data : null;
   const campaign = data?.campaign ?? null;
   const supports = (value: CampaignControlAction | null) => value === "SET_ROI" ? data?.capabilities.setRoi :
     value === "PAUSE" ? data?.capabilities.pause : value === "RESUME" ? data?.capabilities.resume : false;
   const available = supports(action);
   const matchedSync = syncedCampaignId === undefined || (syncedCampaignId === null ? campaign?.operationStatus === "DISABLE" : campaign?.campaignId === syncedCampaignId);
   const canReview = actionsEnabled && matchedSync && !pendingId && !pending;
+  const exactActiveCampaign = campaign?.operationStatus === "ENABLE" && campaign.campaignId === syncedCampaignId ? campaign : null;
+  const canReviewRoiField = canReview && exactActiveCampaign !== null && supports("SET_ROI") === true;
+  const exactRoiDraft = exactActiveCampaign && roiDraft?.campaignId === exactActiveCampaign.campaignId ? roiDraft.value : null;
+  const existingRoiValue = exactActiveCampaign ? String(exactActiveCampaign.roiTargetTenths / 10)
+    : fallbackRoi !== null && Number.isFinite(fallbackRoi) && fallbackRoi >= 0 ? String(fallbackRoi) : "";
+  const requestedRoi = exactRoiDraft === null ? null : parseCampaignRoiTenths(exactRoiDraft);
   const canConfirm = (value: CampaignActionPreview) => canReview && acknowledged && data?.mode === "live" && supports(value.action) &&
+    (!isRoiField || value.action !== "SET_ROI" || canReviewRoiField) &&
     isConfirmableCampaignPreview(value) && campaign?.campaignId === value.campaignId &&
     campaign.operationStatus === value.before.status && campaign.roiTargetTenths === value.before.roiTenths &&
     Date.now() - Date.parse(campaign.observedAt) >= -5_000 && Date.now() - Date.parse(campaign.observedAt) <= 45_000;
@@ -78,18 +91,26 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
     setNotice(null); setOutcome(null); setPreview(null); setAcknowledged(false); setAction(next); setTarget("");
   }
 
-  async function review(event: FormEvent<HTMLFormElement>) {
+  function changeRoiDraft(value: string) {
+    if (!canReviewRoiField || !exactActiveCampaign || busy.current) return;
+    setRoiDraft({ campaignId: exactActiveCampaign.campaignId, value });
+    setAction(null); setNotice(null); setOutcome(null); setPreview(null); setAcknowledged(false);
+  }
+
+  async function review(event: FormEvent<HTMLFormElement>, forcedAction?: CampaignControlAction) {
     event.preventDefault();
-    if (!data || !campaign || !action || !available || !canReview || busy.current) return;
+    const nextAction = forcedAction ?? action;
+    if (!data || !campaign || !nextAction || !supports(nextAction) || !canReview || busy.current ||
+      (isRoiField && nextAction === "SET_ROI" && (!canReviewRoiField || preview?.action === "SET_ROI"))) return;
     const age = Date.now() - Date.parse(campaign.observedAt);
     if (age < -5_000 || age > 45_000) { setNotice("ข้อมูลหมดอายุ กรุณาอัปเดตสถานะแคมเปญก่อน"); return; }
-    const requested = action === "SET_ROI" ? parseCampaignRoiTenths(target) : null;
-    if (action === "SET_ROI" && (requested === null || requested === campaign.roiTargetTenths)) {
+    const requested = nextAction === "SET_ROI" ? (isRoiField ? requestedRoi : parseCampaignRoiTenths(target)) : null;
+    if (nextAction === "SET_ROI" && (requested === null || requested === campaign.roiTargetTenths)) {
       setNotice("กรอก ROI Target ใหม่ 0.1–999.9 โดยใช้ทศนิยมไม่เกิน 1 ตำแหน่ง"); return;
     }
     busy.current = true; setPending(true); setNotice(null); setPreview(null); setAcknowledged(false);
     try {
-      const next = await previewCampaignControl({ campaignId: campaign.campaignId, action, expectedStatus: campaign.operationStatus,
+      const next = await previewCampaignControl({ campaignId: campaign.campaignId, action: nextAction, expectedStatus: campaign.operationStatus,
         expectedRoiTenths: campaign.roiTargetTenths, ...(requested !== null ? { targetRoiTenths: requested } : {}) });
       setPreview(next); setAction(null);
     } catch (error) {
@@ -105,7 +126,11 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
     setOutcome(value);
     if (terminal) {
       setPendingId(null);
-      if (value.status === "APPLIED_VERIFIED") { void result.refetch(); onVerified?.(value.action); }
+      if (value.status === "APPLIED_VERIFIED") {
+        if (value.action === "SET_ROI") setRoiDraft(null);
+        if (canReadDetails) void result.refetch();
+        onVerified?.(value.action);
+      }
     }
   }
 
@@ -128,13 +153,94 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
     finally { busy.current = false; if (mounted.current) setPending(false); }
   }
 
+  const reviewForm = action && <form className="space-y-2 rounded-md border border-border p-2.5 text-sm" onSubmit={(event) => void review(event)}>
+    {action === "SET_ROI" ? <label className="flex flex-wrap items-center gap-2" htmlFor={input}>ROI Target ใหม่
+      <Input id={input} className="w-24" type="text" inputMode="decimal" maxLength={5} value={target} disabled={pending} onChange={(event) => setTarget(event.target.value)} />
+    </label> : <p>ตรวจเงื่อนไข{action === "PAUSE" ? "พัก" : "เปิดใหม่"}สำหรับแคมเปญนี้</p>}
+    <div className="flex flex-wrap gap-1.5">
+      <Button type="submit" size="sm" disabled={!canReview || !available}>{pending ? "กำลังตรวจ…" : "ตรวจรายการ"}</Button>
+      <Button type="button" size="sm" variant="ghost" disabled={pending} onClick={() => { setAction(null); setNotice(null); }}>ยกเลิก</Button>
+    </div>
+  </form>;
+  const reviewResult = preview && <div className="space-y-2 rounded-md bg-muted/50 px-3 py-2 text-sm">
+    <p role="status" className="font-medium">ตรวจรายการผ่าน · ยังไม่ได้ส่งคำสั่งไป TikTok</p>
+    <p className="mt-1 text-muted-foreground">{preview.action === "SET_ROI" ? `ROI Target ${roi(preview.before.roiTenths)}× → ${roi(preview.after.roiTenths)}×`
+      : `${displayStatus(preview.before.status)} → ${displayStatus(preview.after.status)}`}</p>
+    {preview.mode === "live" && <>
+      <p className="break-all text-xs text-muted-foreground">Campaign ID: {preview.campaignId}</p>
+      <label className="flex min-h-10 items-center gap-2">
+        <input className="h-4 w-4" type="checkbox" checked={acknowledged} disabled={!actionsEnabled} onChange={event => setAcknowledged(event.target.checked)} />
+        ยืนยันว่าต้องการส่งคำสั่งนี้จริง
+      </label>
+      <Button className="min-h-11 w-full sm:w-auto" disabled={!canConfirm(preview)} onClick={() => void confirm()}>
+        {preview.action === "RESUME" ? "ยืนยันเปิดแคมเปญจริง" : "ยืนยันส่งคำสั่งจริง"}
+      </Button>
+    </>}
+  </div>;
+  const lifecycleActions = <>
+    {data?.capabilities.pause && <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={!canReview} onClick={() => choose("PAUSE")}><CirclePause className="h-3.5 w-3.5" aria-hidden /> พัก</Button>}
+    {data?.capabilities.resume && <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={!canReview} onClick={() => choose("RESUME")}><CirclePlay className="h-3.5 w-3.5" aria-hidden /> เปิดแคมเปญเดิมอีกครั้ง</Button>}
+  </>;
+  const activity = <>
+    {notice && <p role="status" className="text-xs text-muted-foreground">{notice}</p>}
+    {outcome && <p role="status" className="text-sm font-medium">{outcomeText[outcome.status]}</p>}
+    {pendingId && <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      <span className="break-all">รายการ: {pendingId}</span>
+      <Button type="button" variant="outline" size="sm" className="min-h-11" disabled={pending} onClick={() => void checkPending()}>ตรวจผลรายการเดิม</Button>
+    </div>}
+  </>;
+  const refresh = <Button type="button" size="sm" variant="ghost" className="min-h-9" disabled={result.isFetching || pending}
+    onClick={() => { setAction(null); setPreview(null); setAcknowledged(false); setNotice(null); setRoiDraft(null); void result.refetch(); }}>
+    <RefreshCw className="h-3.5 w-3.5" aria-hidden /> อัปเดต
+  </Button>;
+
+  if (isRoiField) return <section aria-labelledby={heading} className="min-w-0 space-y-2.5 rounded-lg border border-border bg-card p-3.5 sm:p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h3 id={heading} className="text-base font-semibold"><label htmlFor={input}>LIVE ROI Target</label></h3>
+      <div className="flex items-center gap-2">
+        {data?.mode === "dry-run" && <Badge variant="outline">ตรวจเงื่อนไขเท่านั้น</Badge>}
+        {canReadDetails && !blockedRequest(result.error) && refresh}
+      </div>
+    </div>
+    <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => void review(event, "SET_ROI")}>
+      <div className="relative w-full min-w-0 flex-1 basis-36 sm:max-w-xs">
+        <Input id={input} className="min-h-11 pr-9 tabular-nums read-only:bg-muted/30" type="text" inputMode="decimal" maxLength={5}
+          value={exactRoiDraft ?? existingRoiValue} placeholder="—" readOnly={!canReviewRoiField} aria-describedby={description}
+          aria-invalid={canReviewRoiField && exactRoiDraft !== null && exactRoiDraft !== "" && requestedRoi === null ? true : undefined}
+          onChange={(event) => changeRoiDraft(event.target.value)} />
+        <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">×</span>
+      </div>
+      {canReadDetails && <Button type="submit" variant="outline" size="sm" className="min-h-11 shrink-0"
+        disabled={!canReviewRoiField || requestedRoi === null || requestedRoi === exactActiveCampaign?.roiTargetTenths || preview?.action === "SET_ROI"}>{pending ? "กำลังตรวจ…" : "ตรวจ ROI"}</Button>}
+    </form>
+    <p id={description} className="text-xs text-muted-foreground">
+      เป้าหมายยอดขายต่อค่าโฆษณา (เท่า) · {!canReadDetails ? "Sync ก่อนแก้ไข"
+        : result.isPending ? "กำลังอ่านสถานะแคมเปญ…"
+          : result.isError ? "ยังยืนยันสิทธิ์หรือสถานะแคมเปญไม่ได้"
+            : !matchedSync ? "แคมเปญที่อ่านได้ไม่ตรงกับรอบ Sync"
+              : data?.blocker ? reasons.get(data.blocker) ?? "ยังยืนยันเงื่อนไขให้จัดการแคมเปญไม่ได้"
+                : !exactActiveCampaign || !data?.capabilities.setRoi ? "ยังแก้ไขไม่ได้สำหรับแคมเปญนี้"
+                  : exactRoiDraft !== null && requestedRoi === null ? "กรอก 0.1–999.9 โดยใช้ทศนิยมไม่เกิน 1 ตำแหน่ง"
+                    : data.mode === "dry-run" ? "ตรวจเงื่อนไขได้ แต่ยังไม่ส่งคำสั่งไป TikTok"
+                      : "ตรวจรายละเอียดก่อนยืนยันทุกคำสั่ง"}
+    </p>
+    {preview?.action === "SET_ROI" && reviewResult}
+    {(data?.capabilities.pause || data?.capabilities.resume || (preview && preview.action !== "SET_ROI")) && <details className="rounded-md border border-border px-3 py-1">
+      <summary className="min-h-10 cursor-pointer py-2.5 text-sm font-medium">พักหรือเปิดแคมเปญเดิมอีกครั้ง</summary>
+      <div className="space-y-2 pb-2">
+        {campaign && <p className="break-words text-xs text-muted-foreground">{campaign.campaignName || "แคมเปญ Ppan"} · {displayStatus(campaign.operationStatus)}</p>}
+        <div className="flex flex-wrap gap-1.5">{lifecycleActions}</div>
+        {action && action !== "SET_ROI" && reviewForm}
+        {preview && preview.action !== "SET_ROI" && reviewResult}
+      </div>
+    </details>}
+    {activity}
+  </section>;
+
   return <section aria-labelledby={heading} className="space-y-2 rounded-lg border border-border bg-card p-3 sm:p-4">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h4 id={heading} className="text-sm font-semibold">จัดการแคมเปญ Ppan</h4>
-      {!blockedRequest(result.error) && <Button type="button" size="sm" variant="ghost" className="min-h-9" disabled={result.isFetching || pending}
-        onClick={() => { setAction(null); setPreview(null); setNotice(null); void result.refetch(); }}>
-        <RefreshCw className="h-3.5 w-3.5" aria-hidden /> อัปเดต
-      </Button>}
+      {!blockedRequest(result.error) && refresh}
     </div>
     {result.isPending ? <p className="text-xs text-muted-foreground">กำลังอ่านสถานะแคมเปญ…</p> : result.isError ? (
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><LockKeyhole className="h-3.5 w-3.5" aria-hidden />
@@ -148,39 +254,11 @@ export function CampaignControlPanel({ userId, actionsEnabled = true, syncedCamp
       {actionsEnabled && !matchedSync && campaign && <p className="text-xs text-muted-foreground">แคมเปญที่อ่านได้ไม่ตรงกับรอบ Sync กรุณากด Sync อีกครั้ง</p>}
       <div className="flex flex-wrap gap-1.5">
         {data.capabilities.setRoi && <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={!canReview} onClick={() => choose("SET_ROI")}><Target className="h-3.5 w-3.5" aria-hidden /> แก้ ROI Target</Button>}
-        {data.capabilities.pause && <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={!canReview} onClick={() => choose("PAUSE")}><CirclePause className="h-3.5 w-3.5" aria-hidden /> พัก</Button>}
-        {data.capabilities.resume && <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={!canReview} onClick={() => choose("RESUME")}><CirclePlay className="h-3.5 w-3.5" aria-hidden /> เปิดแคมเปญเดิมอีกครั้ง</Button>}
+        {lifecycleActions}
       </div>
-      {action && <form className="space-y-2 rounded-md border border-border p-2.5 text-sm" onSubmit={(event) => void review(event)}>
-        {action === "SET_ROI" ? <label className="flex flex-wrap items-center gap-2" htmlFor={input}>ROI Target ใหม่
-          <Input id={input} className="w-24" type="text" inputMode="decimal" maxLength={5} value={target} disabled={pending} onChange={(event) => setTarget(event.target.value)} />
-        </label> : <p>ตรวจเงื่อนไข{action === "PAUSE" ? "พัก" : "เปิดใหม่"}สำหรับแคมเปญนี้</p>}
-        <div className="flex flex-wrap gap-1.5">
-          <Button type="submit" size="sm" disabled={!canReview || !available}>{pending ? "กำลังตรวจ…" : "ตรวจรายการ"}</Button>
-          <Button type="button" size="sm" variant="ghost" disabled={pending} onClick={() => { setAction(null); setNotice(null); }}>ยกเลิก</Button>
-        </div>
-      </form>}
-      {preview && <div className="space-y-2 rounded-md bg-muted/50 px-3 py-2 text-sm">
-        <p role="status" className="font-medium">ตรวจรายการผ่าน · ยังไม่ได้ส่งคำสั่งไป TikTok</p>
-        <p className="mt-1 text-muted-foreground">{preview.action === "SET_ROI" ? `ROI Target ${roi(preview.before.roiTenths)}× → ${roi(preview.after.roiTenths)}×`
-          : `${displayStatus(preview.before.status)} → ${displayStatus(preview.after.status)}`}</p>
-        {preview.mode === "live" && <>
-          <p className="break-all text-xs text-muted-foreground">Campaign ID: {preview.campaignId}</p>
-          <label className="flex min-h-10 items-center gap-2">
-            <input className="h-4 w-4" type="checkbox" checked={acknowledged} disabled={!actionsEnabled} onChange={event => setAcknowledged(event.target.checked)} />
-            ยืนยันว่าต้องการส่งคำสั่งนี้จริง
-          </label>
-          <Button className="min-h-11 w-full sm:w-auto" disabled={!canConfirm(preview)} onClick={() => void confirm()}>
-            {preview.action === "RESUME" ? "ยืนยันเปิดแคมเปญจริง" : "ยืนยันส่งคำสั่งจริง"}
-          </Button>
-        </>}
-      </div>}
+      {reviewForm}
+      {reviewResult}
     </>}
-    {notice && <p role="status" className="text-xs text-muted-foreground">{notice}</p>}
-    {outcome && <p role="status" className="text-sm font-medium">{outcomeText[outcome.status]}</p>}
-    {pendingId && <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-      <span className="break-all">รายการ: {pendingId}</span>
-      <Button type="button" variant="outline" size="sm" className="min-h-11" disabled={pending} onClick={() => void checkPending()}>ตรวจผลรายการเดิม</Button>
-    </div>}
+    {activity}
   </section>;
 }

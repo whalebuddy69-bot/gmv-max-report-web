@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationOverview } from "@/api/automation";
 import { MAX_OBSERVATION_AGE_MS } from "@/lib/automation";
 import { invalidateOtherAutoBudgetViews } from "./AutoBudgetStatusPanel";
-import { CreatorEditBudgetMeter, CreatorOverviewEdit, creatorEditControlScope, getCreatorEditSync, isCreatorEditSyncCurrent } from "./CreatorOverviewEdit";
+import { CreatorCampaignSchedule, CreatorEditBudgetMeter, CreatorEditFormFields, CreatorOverviewEdit, creatorEditControlScope, getCreatorEditSync, isCreatorEditSyncCurrent } from "./CreatorOverviewEdit";
 
 const readAt = "2026-11-08T04:00:00.000Z";
 const now = Date.parse(readAt) + 1_000;
@@ -23,6 +23,8 @@ const client: AutomationClient = {
 const overview = (...clients: AutomationClient[]): AutomationOverview => ({
   schemaVersion: 1, checkedAt: readAt, coverage: "configured-creators-only", clients,
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("creator overview edit scope", () => {
   it("makes explicit, fresh sync local to the exact creator, advertiser and TikTok account", () => {
@@ -75,6 +77,43 @@ describe("creator overview edit scope", () => {
       onClose={() => { throw new Error("unexpected close"); }} onRefreshCampaign={() => { throw new Error("unexpected refresh"); }}
       onSync={async () => { throw new Error("unexpected sync"); }} />);
     expect(markup).toBe("");
+  });
+
+  it("renders account and the five single-page edit sections in order, with the proper units and no tabs", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const queryClient = new QueryClient();
+    const html = renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <CreatorEditFormFields client={client} userId={1} now={now} sync={null} onRefreshCampaign={() => {}} />
+    </QueryClientProvider>);
+    const sections = ["ข้อมูลบัญชี", "LIVE ROI Target", "Daily budget", "Auto budget increase", "Daily Ceiling", "Schedule", "Campaign Name"];
+    const positions = sections.map((section) => html.indexOf(section));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(html).toContain("Daily budget (THB)");
+    expect(html).toContain("Daily Ceiling (THB)");
+    expect(html).toContain("×");
+    expect(html).not.toContain('role="tab');
+    expect(html).toContain("Sync บัญชีนี้ก่อนแก้งบ");
+    queryClient.clear();
+  });
+
+  it("renders verified schedules in Bangkok time with a read-only end indicator", () => {
+    const campaign = client.campaign!;
+    const scheduled = renderToStaticMarkup(<CreatorCampaignSchedule campaign={{ ...campaign,
+      scheduleStartAt: "2026-11-08T19:12:00Z", scheduleEndAt: "2026-11-09T21:34:00Z",
+    }} />);
+    expect(scheduled).toContain("2026-11-09 02:12");
+    expect(scheduled).toContain("2026-11-10 04:34");
+    expect(scheduled).toContain("Synthetic Campaign");
+    expect(scheduled).toMatch(/<input[^>]+role="switch"[^>]+disabled=""[^>]+checked=""/);
+    const openEnded = renderToStaticMarkup(<CreatorCampaignSchedule campaign={{ ...campaign, scheduleStartAt: readAt, scheduleEndAt: null }} />);
+    expect(openEnded).toContain("ไม่กำหนดวันสิ้นสุด");
+    expect(openEnded).not.toContain('checked=""');
+    for (const unknown of [campaign, { ...campaign, scheduleStartAt: readAt }, { ...campaign, scheduleStartAt: null, scheduleEndAt: null }, null]) {
+      const markup = renderToStaticMarkup(<CreatorCampaignSchedule campaign={unknown} />);
+      expect(markup).toContain("ยังยืนยันการตั้งวันสิ้นสุดไม่ได้");
+      expect(markup).not.toContain('role="switch"');
+    }
   });
 
   it("shows the budget threshold without treating unknown spend as zero or progress as a write", () => {

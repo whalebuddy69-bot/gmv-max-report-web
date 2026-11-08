@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
 import { armBudgetAuto, armBudgetAutoContinuous, armPpanBudgetAutoContinuous, ASHOP_CAP_CLIENT_ID, budgetAutoStatusSchema, fetchBudgetAutoStatus, NNSHOP_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, stopBudgetAuto, stopBudgetAutoContinuous, stopPpanBudgetAutoContinuous, type BudgetAutoStatus } from "@/api/automationBudget";
 import { http } from "@/api/client";
-import { AutoBudgetControls, AutoBudgetStatusBody, getAutoArmPreview } from "./AutoBudgetStatusPanel";
+import { AutoBudgetControls, AutoBudgetStatusBody, autoFormSwitchState, getAutoArmPreview } from "./AutoBudgetStatusPanel";
 
 const observedAt = "2026-03-06T01:00:00.000Z";
 const now = Date.parse(observedAt) + 2_000;
@@ -132,6 +132,28 @@ describe("read-only Auto budget panel", () => {
 });
 
 describe("Ppan continuous Auto", () => {
+  it("shows the scoped Auto switch and never treats an available preview as an armed session", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const post = vi.spyOn(http, "post");
+    const props = { variant: "campaign-form", campaignId: sampleNumericCampaign, clientId: PILOT_BUDGET_CLIENT_ID, dataUpdatedAt: now, refresh: async () => null } as const;
+    const tag = (html: string) => html.match(/<button[^>]*role="switch"[^>]*>/)?.[0] ?? "";
+    const available = renderToStaticMarkup(<AutoBudgetControls {...props} data={spendTrend} />);
+    expect(tag(available)).toContain('aria-checked="false"');
+    expect(tag(available)).not.toContain(' disabled=""');
+    expect(available).not.toContain("ยืนยันเปิด Auto ต่อเนื่อง ใช้เงินจริง");
+    const blocked = renderToStaticMarkup(<AutoBudgetControls {...props} data={spendTrend} blockAutoStart />);
+    expect(tag(blocked)).toContain(' disabled=""');
+    const activeSummary = { ...spendTrend, canArm: false, canStop: true, preview: null, overviewState: "on",
+      continuousSession: { sessionId, status: "ARMED", startedAt: observedAt },
+    } satisfies BudgetAutoStatus;
+    const enabled = renderToStaticMarkup(<AutoBudgetControls {...props} campaignId={null} data={activeSummary} blockAutoStart />);
+    expect(tag(enabled)).toContain('aria-checked="true"');
+    expect(tag(enabled)).not.toContain(' disabled=""');
+    expect(autoFormSwitchState(activeSummary, SRIHIW_CAP_CLIENT_ID)).toBeNull();
+    expect(autoFormSwitchState({ ...activeSummary, continuousSession: null, overviewState: null }, PILOT_BUDGET_CLIENT_ID)).toBeNull();
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("accepts exact Ppan status only and keeps old one-shot payloads valid", () => {
     const session = { sessionId, status: "ARMED", startedAt: observedAt, reason: null } as const;
     expect(budgetAutoStatusSchema.safeParse({ ...continuous, continuousSession: session }).success).toBe(true);

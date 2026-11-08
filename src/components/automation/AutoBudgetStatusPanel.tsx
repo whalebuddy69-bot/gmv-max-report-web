@@ -2,7 +2,7 @@ import { useId, useRef, useState, type FormEvent } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
-import { armBudgetAuto, armBudgetAutoContinuous, fetchBudgetAutoStatus, isContinuousBudgetClientId, stopBudgetAuto, stopBudgetAutoContinuous,
+import { armBudgetAuto, armBudgetAutoContinuous, fetchBudgetAutoOverviewStatus, fetchBudgetAutoStatus, isContinuousBudgetClientId, stopBudgetAuto, stopBudgetAutoContinuous,
   type BudgetAutoArmInput, type BudgetAutoSpendTrendArmInput, type BudgetAutoVerifiedContinuousArmInput, type BudgetAutoStatus,
   type BudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BANGKOK, bangkokDay } from "@/lib/automation";
 import { formatBudgetBaht } from "@/lib/automationBudget";
+import { cn } from "@/lib/utils";
 
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, dateStyle: "medium", timeStyle: "short" });
 const blockers = new Map([
@@ -113,6 +114,21 @@ export function getAutoArmPreview(data: BudgetAutoStatus, campaignId: string | n
     && (preview.status === "BELOW_THRESHOLD" || preview.status === "WOULD_INCREASE") ? preview : null;
 }
 
+/** A switch shows persisted authorization, never a draft, preview, or assumed successful write. */
+export function autoFormSwitchState(data: BudgetAutoStatus, clientId: BudgetCapClientId): boolean | null {
+  if (data.clientId !== clientId) return null;
+  if (data.overviewState === "off") return false;
+  const session = isContinuous(data) ? data.continuousSession : null;
+  if (session) return session.status !== "STOPPED";
+  if (data.grant) {
+    if (data.grant.status === "ARMED" || data.grant.status === "RESERVED") return true;
+    if (["COMPLETED", "REVOKED", "EXPIRED"].includes(data.grant.status)) return false;
+    return null;
+  }
+  if (data.overviewState !== undefined) return null;
+  return data.mode !== "live" || data.canArm === true ? false : null;
+}
+
 /** A recent fetch does not prove that the underlying provider spend is current. */
 export function AutoBudgetStatusBody({ data, campaignId, now }: {
   data: BudgetAutoStatus;
@@ -154,13 +170,15 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
   </>;
 }
 
-export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, refresh, onChanged }: {
+export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, refresh, onChanged, variant = "panel", blockAutoStart = false }: {
   data: BudgetAutoStatus;
   campaignId: string | null;
   clientId: BudgetCapClientId;
   dataUpdatedAt: number;
   refresh: () => Promise<unknown>;
   onChanged?: () => void;
+  variant?: "panel" | "campaign-form";
+  blockAutoStart?: boolean;
 }) {
   const [duration, setDuration] = useState("30");
   const [draft, setDraft] = useState<AutoDraft | null>(null);
@@ -173,9 +191,14 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   const durationId = useId();
   const needsFreshRead = lastAttemptAt !== null && dataUpdatedAt <= lastAttemptAt;
   const preview = data.clientId === clientId ? getAutoArmPreview(data, campaignId, Date.now()) : null;
+  const compact = variant === "campaign-form";
+  const switchState = autoFormSwitchState(data, clientId);
   const continuous = isContinuous(data);
   const spendTrend = usesSpendTrend(data);
   const session = continuous ? data.continuousSession : null;
+  const switchLabel = switchState === null ? data.overviewState === "blocked" ? "พักเพื่อตรวจข้อมูล" : "ยังยืนยันสถานะไม่ได้"
+    : !switchState ? "ปิด" : session?.status === "BLOCKED" || data.overviewState === "blocked" ? "เปิดอยู่ · พักเพื่อตรวจข้อมูล"
+      : data.mode !== "live" ? "เปิดอยู่ · ระบบไม่เพิ่มงบ" : "เปิด";
   const canStop = data.clientId === clientId && data.canStop === true;
   const stopSessionId = canStop && session && session.status !== "STOPPED" ? session.sessionId : null;
   const stopGrantId = canStop && data.grant && (data.grant.status === "ARMED" || data.grant.status === "RESERVED") ? data.grant.grantId : null;
@@ -187,15 +210,15 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
 
   function matchesDraft() {
     const latest = data.clientId === clientId ? getAutoArmPreview(data, campaignId, Date.now()) : null;
-    return !!latest && !!draft && (draft.strategy === "continuous") === continuous && latest.campaignId === draft.input.expectedCampaignId
+    return !blockAutoStart && !!latest && !!draft && (draft.strategy === "continuous") === continuous && latest.campaignId === draft.input.expectedCampaignId
       && latest.currentBudgetMinor === draft.input.expectedBudgetMinor && latest.policyRevision === draft.input.expectedPolicyRevision
       && (draft.strategy !== "continuous" || (draft.evidenceMode === "spend-trend"
         ? spendTrend : !spendTrend && latest.liveSessionId === draft.input.expectedLiveSessionId));
   }
 
-  function review(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (busy.current || needsFreshRead || !preview || (!continuous && !durationValid)) return;
+  function review(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    if (blockAutoStart || busy.current || needsFreshRead || !preview || (!continuous && !durationValid)) return;
     setNotice("");
     setNativeOff(false);
     setExclusive(false);
@@ -258,9 +281,32 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
     }
   }
 
-  if (!preview && !stopId && !draft && !notice && !pending) return null;
-  return <div className="mt-3 space-y-2 border-t border-border pt-3 text-sm">
-    {stopId && <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null || needsFreshRead} onClick={() => void stop()}>
+  if (!compact && !preview && !stopId && !draft && !notice && !pending) return null;
+  return <div className={compact ? "mt-2 space-y-2.5 text-sm" : "mt-3 space-y-2 border-t border-border pt-3 text-sm"}>
+    {compact && <>
+      <div className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-border px-3 py-1.5">
+        <div>
+          <p className="font-medium">{switchLabel}</p>
+          {pending && <p role="status" className="text-xs text-muted-foreground">{pending === "stop" ? "กำลังตรวจผลการหยุด…" : "กำลังเปิด Auto…"}</p>}
+        </div>
+        {switchState !== null ? <button type="button" role="switch" aria-checked={switchState} aria-label="Auto budget increase"
+          disabled={pending !== null || needsFreshRead || (switchState ? !stopId : !!stopId || !preview || blockAutoStart || draft !== null || (!continuous && !durationValid))}
+          onClick={() => { if (switchState) void stop(); else review(); }}
+          className="group flex h-11 shrink-0 items-center rounded-md px-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50">
+          <span aria-hidden className={cn("relative block h-6 w-11 rounded-full transition-colors", switchState ? "bg-primary" : "bg-muted-foreground/40")}>
+            <span className={cn("absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform", switchState && "translate-x-5")} />
+          </span>
+        </button> : <span aria-hidden className="mr-1 h-6 w-11 shrink-0 rounded-full border border-dashed border-muted-foreground/50" />}
+      </div>
+      {!switchState && blockAutoStart && <p className="text-xs text-muted-foreground">ปิดหรือจัดการรายการงบและเพดานที่ค้างอยู่ก่อนเปิด Auto</p>}
+      {!campaignId && !stopId && <p className="text-xs text-muted-foreground">ต้อง Sync และพบแคมเปญที่เปิดอยู่ก่อนเปิด Auto</p>}
+      {switchState !== true && stopId && <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null || needsFreshRead} onClick={() => void stop()}>หยุด Auto</Button>}
+      {!draft && preview && !continuous && <label htmlFor={durationId} className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        ระยะเวลาเปิด Auto (10–120 นาที)
+        <Input id={durationId} type="text" inputMode="numeric" maxLength={3} value={duration} onChange={(event) => setDuration(event.target.value)} className="w-20" disabled={pending !== null || needsFreshRead || blockAutoStart} />
+      </label>}
+    </>}
+    {!compact && stopId && <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null || needsFreshRead} onClick={() => void stop()}>
       {pending === "stop" ? "กำลังตรวจผลการหยุด…" : stopSessionId ? "หยุด Auto ต่อเนื่อง" : "หยุดรอบ Auto"}
     </Button>}
     {draft ? <div className="space-y-2">
@@ -278,11 +324,11 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
         <Button type="button" className="min-h-10" disabled={!matchesDraft() || !attestationComplete || pending !== null || needsFreshRead} onClick={() => void confirm()}>{pending === "arm" ? "กำลังเปิด Auto…" : draft.strategy === "continuous" ? "ยืนยันเปิด Auto ต่อเนื่อง ใช้เงินจริง" : "ยืนยันเปิด Auto ใช้เงินจริง"}</Button>
         <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null} onClick={() => setDraft(null)}>ยกเลิก</Button>
       </div>
-    </div> : preview && <form className="space-y-2" onSubmit={review}>
+    </div> : !compact && preview && <form className="space-y-2" onSubmit={review}>
       {!continuous && <label htmlFor={durationId} className="block font-medium">ระยะเวลาเปิด Auto (10–120 นาที)</label>}
       <div className="flex flex-wrap items-center gap-2">
         {!continuous && <Input id={durationId} type="text" inputMode="numeric" maxLength={3} value={duration} onChange={(event) => setDuration(event.target.value)} className="w-24" disabled={pending !== null || needsFreshRead} />}
-        <Button type="submit" variant="outline" className="min-h-10" disabled={(!continuous && !durationValid) || pending !== null || needsFreshRead}>ตรวจเงื่อนไขก่อนเปิด Auto{continuous ? " ต่อเนื่อง" : ""}</Button>
+        <Button type="submit" variant="outline" className="min-h-10" disabled={(!continuous && !durationValid) || pending !== null || needsFreshRead || blockAutoStart}>ตรวจเงื่อนไขก่อนเปิด Auto{continuous ? " ต่อเนื่อง" : ""}</Button>
       </div>
       <p className="text-xs text-muted-foreground">{continuous ? "เริ่มทันทีหลังยืนยัน · ไม่ต้องตั้งระยะเวลา" : "เริ่มทันทีหลังยืนยัน ไม่ใช่การตั้งเวลาเริ่มล่วงหน้า"}</p>
     </form>}
@@ -301,33 +347,48 @@ export function invalidateOtherAutoBudgetViews(queryClient: QueryClient, userId:
 }
 
 /** Mounted only for the expanded, scoped Creator row; server capabilities govern all controls. */
-export function AutoBudgetStatusPanel({ clientId, userId, campaignId }: {
+export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = "panel", blockAutoStart = false }: {
   clientId: BudgetCapClientId;
   userId: number;
   campaignId: string | null;
+  variant?: "panel" | "campaign-form";
+  blockAutoStart?: boolean;
 }) {
   const titleId = useId();
   const queryClient = useQueryClient();
+  const compact = variant === "campaign-form";
+  // The scoped ledger summary already exposes a verified Stop action. Do not
+  // ask TikTok for arming facts merely because the Edit form was opened.
+  const readCompactSummary = compact && campaignId === null;
   const query = useQuery({
-    queryKey: ["automation", "budget-auto-status", userId, clientId, campaignId],
-    queryFn: ({ signal }) => fetchBudgetAutoStatus(clientId, signal),
+    queryKey: readCompactSummary ? ["automation", "budget-auto-overview", userId, clientId] : ["automation", "budget-auto-status", userId, clientId, campaignId],
+    queryFn: ({ signal }) => readCompactSummary ? fetchBudgetAutoOverviewStatus(clientId, signal) : fetchBudgetAutoStatus(clientId, signal),
     retry: false,
     gcTime: 0,
     staleTime: 30_000,
     refetchInterval: (state) => statusUnavailable(state.state.error) ? false
-      : state.state.data?.canArm === true || state.state.data?.canStop === true ? 20_000 : 60_000,
+      : !readCompactSummary && (state.state.data?.canArm === true || state.state.data?.canStop === true) ? 20_000 : 60_000,
     refetchIntervalInBackground: false,
   });
-  if (statusUnavailable(query.error)) return null;
-  return <section className="mt-3 min-w-0 rounded-lg border border-border bg-card p-3 sm:p-4" aria-labelledby={titleId}>
-    <h2 id={titleId} className="flex items-center gap-2 text-base font-semibold"><Activity className="h-4 w-4 shrink-0" aria-hidden /> เพิ่มงบอัตโนมัติ</h2>
+  if (!compact && statusUnavailable(query.error)) return null;
+  return <section className={cn("min-w-0 rounded-lg border border-border bg-card p-3.5 sm:p-4", !compact && "mt-3")} aria-labelledby={titleId}>
+    <h3 id={titleId} className="flex items-center gap-2 text-base font-semibold"><Activity className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />{compact ? "Auto budget increase" : "เพิ่มงบอัตโนมัติ"}</h3>
     <p className="mt-1 text-sm text-muted-foreground">ใช้ถึง 80% → เพิ่มงบ 20% เมื่อผ่านเพดานและเงื่อนไขความปลอดภัย</p>
-    <p className="mt-1 text-xs text-muted-foreground">ยอดใช้จากรายงาน TikTok อาจล่าช้า และการอ่านรายงานสำเร็จไม่ยืนยันว่ากำลังไลฟ์อยู่</p>
+    {!compact && <p className="mt-1 text-xs text-muted-foreground">ยอดใช้จากรายงาน TikTok อาจล่าช้า และการอ่านรายงานสำเร็จไม่ยืนยันว่ากำลังไลฟ์อยู่</p>}
     {query.isSuccess
       ? <>
-        <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />
+        {!compact && <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />}
         <AutoBudgetControls key={`${userId}:${clientId}:${campaignId ?? "none"}`} data={query.data} clientId={clientId} campaignId={campaignId} dataUpdatedAt={query.dataUpdatedAt} refresh={query.refetch}
-          onChanged={() => { void invalidateOtherAutoBudgetViews(queryClient, userId, clientId, campaignId); }} />
+          variant={variant} blockAutoStart={blockAutoStart} onChanged={() => {
+            // In summary mode the current query and overview are the same; the
+            // control's immediate refresh is enough for both observers.
+            if (!readCompactSummary) void invalidateOtherAutoBudgetViews(queryClient, userId, clientId, campaignId);
+          }} />
+        {compact && <details className="mt-2 text-xs text-muted-foreground">
+          <summary className="min-h-9 w-fit cursor-pointer py-2">ดูสถานะและเหตุผลของ Auto</summary>
+          {readCompactSummary ? <p className="pb-1">Sync บัญชีนี้เพื่อดูผลประเมินและเงื่อนไขเปิด Auto</p>
+            : <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />}
+        </details>}
       </>
       : <p role="status" className="mt-2 text-xs text-muted-foreground">
         {query.isPending ? "กำลังตรวจสถานะ Auto…" : "ยังอ่านสถานะ Auto ไม่ได้"}

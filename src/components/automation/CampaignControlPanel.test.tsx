@@ -1,7 +1,9 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { campaignControlStatusSchema, confirmCampaignControl, isConfirmableCampaignPreview, previewCampaignControl, readCampaignOperation } from "@/api/automationCampaign";
 import { http } from "@/api/client";
-import { parseCampaignRoiTenths } from "./CampaignControlPanel";
+import { CampaignControlPanel, parseCampaignRoiTenths } from "./CampaignControlPanel";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -10,6 +12,47 @@ describe("Ppan campaign action review", () => {
   const input = { campaignId, action: "PAUSE", expectedStatus: "ENABLE", expectedRoiTenths: 60 } as const;
   const preview = { campaignId, action: "PAUSE", sent: false, mode: "dry-run",
     before: { status: "ENABLE", roiTenths: 60 }, after: { status: "DISABLE", roiTenths: 60 } } as const;
+  const observedAt = new Date().toISOString();
+  const status = { clientId: "punpan_020", mode: "dry-run", blocker: null,
+    campaign: { campaignId, campaignName: "sample", operationStatus: "ENABLE", roiTargetTenths: 62, observedAt },
+    capabilities: { setRoi: true, pause: true, resume: false, create: false } } as const;
+
+  function renderRoiField(actionsEnabled: boolean, syncedCampaignId?: string | null, supplied: unknown = status) {
+    const client = new QueryClient();
+    client.setQueryData(["automation", "campaign-control", 7], campaignControlStatusSchema.parse(supplied));
+    const result = renderToStaticMarkup(<QueryClientProvider client={client}>
+      <CampaignControlPanel layout="roi-field" userId={7} fallbackRoi={5.8} actionsEnabled={actionsEnabled} syncedCampaignId={syncedCampaignId} />
+    </QueryClientProvider>);
+    client.clear();
+    return result;
+  }
+
+  it("shows the selected campaign's known ROI as a multiplier and keeps it read-only until exact Sync", () => {
+    const beforeSync = renderRoiField(false, undefined);
+    expect(beforeSync).toContain("LIVE ROI Target");
+    expect(beforeSync).toContain("×");
+    expect(beforeSync).not.toContain("THB");
+    expect(beforeSync).toContain('readonly=""');
+    expect(beforeSync).toContain('value="5.8"');
+    expect(beforeSync).not.toContain("ตรวจ ROI");
+    const unmatched = renderRoiField(true, "2234567890123456");
+    expect(unmatched).toContain('readonly=""');
+    expect(unmatched).toContain('value="5.8"');
+    const exact = renderRoiField(true, campaignId);
+    expect(exact).not.toContain('readonly=""');
+    expect(exact).toContain('value="6.2"');
+    expect(exact).toContain("ตรวจ ROI");
+    expect(exact).toContain("ยังไม่ส่งคำสั่งไป TikTok");
+  });
+
+  it("can review resuming the matched paused campaign without making its ROI writable", () => {
+    const paused = renderRoiField(true, null, { ...status,
+      campaign: { ...status.campaign, operationStatus: "DISABLE" },
+      capabilities: { ...status.capabilities, pause: false, resume: true } });
+    expect(paused).toContain('readonly=""');
+    expect(paused).toContain("เปิดแคมเปญเดิมอีกครั้ง");
+    expect(paused).not.toContain('value="6.2"');
+  });
 
   it("converts decimal ROI values without floating rounding or unexpected inputs", () => {
     expect(parseCampaignRoiTenths("2.3")).toBe(23);
@@ -38,6 +81,18 @@ describe("Ppan campaign action review", () => {
     await expect(previewCampaignControl({ ...input, expectedStatus: "DISABLE" })).rejects.toThrow();
     await expect(previewCampaignControl({ ...input, targetRoiTenths: 7 })).rejects.toThrow();
     expect(post.mock.calls).toEqual(Array.from({ length: 3 }, () => ["/automation/campaign/preview", input]));
+  });
+
+  it("keeps a matching ROI dry run in preview and rejects a response that changes delivery status", async () => {
+    const roiInput = { ...input, action: "SET_ROI", targetRoiTenths: 72 } as const;
+    const dryRun = { ...preview, action: "SET_ROI", after: { status: "ENABLE", roiTenths: 72 } } as const;
+    const post = vi.spyOn(http, "post").mockResolvedValueOnce({ data: dryRun })
+      .mockResolvedValueOnce({ data: { ...dryRun, after: { ...dryRun.after, status: "DISABLE" } } });
+    const reviewed = await previewCampaignControl(roiInput);
+    expect(reviewed).toEqual(dryRun);
+    await expect(confirmCampaignControl(reviewed)).rejects.toThrow();
+    await expect(previewCampaignControl(roiInput)).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    expect(post.mock.calls).toEqual(Array.from({ length: 2 }, () => ["/automation/campaign/preview", roiInput]));
   });
 
   it("never confirms a dry run, expired permit, or unexpected permit lifetime", async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type ComponentProps, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Pencil, RefreshCw } from "lucide-react";
 import { changeBudgetCap, fetchAdditionalBudgetCapStatus, isAdditionalBudgetCapClientId, type AdditionalBudgetCapClientId, type BudgetCapClientId, type BudgetCapStatus } from "@/api/automationBudget";
@@ -7,8 +7,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BANGKOK } from "@/lib/automation";
 import { budgetCapResultMatches, canConfirmBudgetCap, canEditBudgetCap, formatBudgetBaht, freshBudgetCap, parseBudgetBaht, type BudgetCapReview } from "@/lib/automationBudget";
+import { cn } from "@/lib/utils";
 
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, timeStyle: "medium" });
+
+export function CampaignAmountField({ className, ...props }: Omit<ComponentProps<typeof Input>, "type" | "inputMode">) {
+  return <div className="flex min-w-0 max-w-xs items-center rounded-md border border-input bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring">
+    <Input {...props} type="text" inputMode="decimal" className={cn("h-11 min-w-0 border-0 bg-transparent text-base tabular-nums shadow-none focus-visible:ring-0 sm:text-sm", className)} />
+    <span aria-hidden className="shrink-0 border-l border-border px-3 text-sm font-medium text-muted-foreground">THB</span>
+  </div>;
+}
 
 function capChangeError(error: unknown) {
   if (error instanceof ApiError) {
@@ -21,7 +29,7 @@ function capChangeError(error: unknown) {
 }
 
 export function BudgetCapEditor({
-  active, blocked = false, clientId, displayName, status, loading, refreshStatus, onEditingChange,
+  active, blocked = false, clientId, displayName, status, loading, refreshStatus, onEditingChange, variant,
 }: {
   active: boolean;
   blocked?: boolean;
@@ -31,6 +39,7 @@ export function BudgetCapEditor({
   loading: boolean;
   refreshStatus: () => Promise<unknown>;
   onEditingChange?: (editing: boolean) => void;
+  variant?: "campaign-form";
 }) {
   const [now, setNow] = useState(Date.now);
   const [draft, setDraft] = useState<{ amount: string; review: BudgetCapReview | null } | null>(null);
@@ -43,18 +52,19 @@ export function BudgetCapEditor({
   const canEdit = active && !blocked && canEditBudgetCap(known, clientId, now);
   const canConfirm = canEdit && !!draft?.review && canConfirmBudgetCap(draft.review, known, clientId, now);
   const unset = known && !known.cap && isAdditionalBudgetCapClientId(clientId);
+  const compact = variant === "campaign-form";
 
   useEffect(() => {
-    if (!active) return;
+    if (!active && !compact) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [active]);
+  }, [active, compact]);
 
   function openDraft() {
     if (busy.current || !active || blocked || !canEditBudgetCap(known, clientId, Date.now())) return;
     setNotice(null);
-    setDraft({ amount: "", review: null });
+    setDraft({ amount: variant === "campaign-form" && cap ? formatBudgetBaht(cap.clientDailyCapMinor).slice(1) : "", review: null });
     onEditingChange?.(true);
   }
 
@@ -109,7 +119,12 @@ export function BudgetCapEditor({
 
   return (
     <div>
-      {cap ? (
+      {compact ? (!draft || !!draft.review) && <div className="space-y-1.5">
+        <label htmlFor={inputId} className="sr-only">Daily Ceiling (THB)</label>
+        <CampaignAmountField id={inputId} readOnly value={cap ? formatBudgetBaht(cap.clientDailyCapMinor).slice(1) : ""} placeholder="—" />
+        {!cap && <p className="text-xs text-muted-foreground">{loading ? "กำลังตรวจสิทธิ์และเพดาน…" : unset ? "ยังไม่ได้ตั้งเพดานงบ" : "ยังไม่มีเพดานล่าสุดที่ยืนยันได้"}</p>}
+        {cap && cap.clientDailyCapMinor !== cap.campaignCapMinor && <p className="text-xs text-muted-foreground">เพดานต่อแคมเปญ {formatBudgetBaht(cap.campaignCapMinor)} · ต่างจากเพดานรวมต่อวัน</p>}
+      </div> : cap ? (
         <dl className="grid gap-2 rounded-md border border-border p-3 text-sm sm:grid-cols-2">
           <div><dt className="text-muted-foreground">เพดานต่อแคมเปญ</dt><dd className="font-medium tabular">{formatBudgetBaht(cap.campaignCapMinor)}</dd></div>
           <div><dt className="text-muted-foreground">เพดานรวมวันนี้</dt><dd className="font-medium tabular">{formatBudgetBaht(cap.clientDailyCapMinor)}</dd></div>
@@ -138,9 +153,11 @@ export function BudgetCapEditor({
           </div>
         </div>
       ) : draft ? (
-        <form onSubmit={stage} className="mt-3 space-y-2 rounded-md border border-border p-3">
+        <form onSubmit={stage} className={compact ? "space-y-2" : "mt-3 space-y-2 rounded-md border border-border p-3"}>
           <label htmlFor={inputId} className="block text-sm font-medium">เพดานใหม่ของ {displayName} (บาท)</label>
-          <Input id={inputId} type="text" inputMode="decimal" autoComplete="off" maxLength={25} placeholder="เช่น 30,000" value={draft.amount} disabled={!canEdit} onChange={(event) => setDraft({ amount: event.target.value, review: null })} />
+          {compact ? <CampaignAmountField id={inputId} autoComplete="off" maxLength={25} placeholder="เช่น 30,000" value={draft.amount} disabled={!canEdit}
+            onChange={(event) => setDraft({ amount: event.target.value, review: null })} />
+            : <Input id={inputId} type="text" inputMode="decimal" autoComplete="off" maxLength={25} placeholder="เช่น 30,000" value={draft.amount} disabled={!canEdit} onChange={(event) => setDraft({ amount: event.target.value, review: null })} />}
           <p className="text-xs text-muted-foreground">เปลี่ยนเพดานเป็นกติกาสำหรับครั้งถัดไป ไม่ใช่การปรับงบ TikTok</p>
           <div className="flex flex-wrap gap-2">
             <Button type="submit" className="min-h-10" disabled={!canEdit || !draft.amount.trim()}>ตรวจเพดานใหม่</Button>
@@ -153,15 +170,17 @@ export function BudgetCapEditor({
   );
 }
 
-export function AdditionalBudgetCapPanel({ active, userId, clientId, displayName, blocked, onEditingChange, refreshBudgetStatus }: {
+export function AdditionalBudgetCapPanel({ active, userId, clientId, displayName, blocked, onEditingChange, refreshBudgetStatus, variant }: {
   active: boolean; userId: number; clientId: AdditionalBudgetCapClientId; displayName: string; blocked: boolean; onEditingChange: (editing: boolean) => void;
   refreshBudgetStatus: () => Promise<unknown>;
+  variant?: "campaign-form";
 }) {
   const titleId = useId();
+  const compact = variant === "campaign-form";
   const query = useQuery({
     queryKey: ["automation", "cap-status", userId, clientId],
     queryFn: ({ signal }) => fetchAdditionalBudgetCapStatus(clientId, signal),
-    enabled: active,
+    enabled: active || compact,
     gcTime: 0,
     retry: false,
     staleTime: 0,
@@ -169,6 +188,10 @@ export function AdditionalBudgetCapPanel({ active, userId, clientId, displayName
     refetchInterval: (state) => !active || state.state.error ? false : 20_000,
   });
   const status = query.isSuccess ? query.data : null;
+  const editor = <BudgetCapEditor active={active} clientId={clientId} displayName={displayName}
+    status={status} loading={query.isPending} refreshStatus={() => Promise.all([query.refetch(), refreshBudgetStatus()])}
+    blocked={blocked} onEditingChange={onEditingChange} variant={variant} />;
+  if (compact) return editor;
   return (
     <section className="min-w-0" aria-labelledby={titleId}>
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
@@ -180,9 +203,7 @@ export function AdditionalBudgetCapPanel({ active, userId, clientId, displayName
           <RefreshCw className="h-4 w-4" aria-hidden />ตรวจเพดานล่าสุด
         </Button>
       </div>
-      <BudgetCapEditor active={active} clientId={clientId} displayName={displayName}
-        status={status} loading={query.isPending} refreshStatus={() => Promise.all([query.refetch(), refreshBudgetStatus()])}
-        blocked={blocked} onEditingChange={onEditingChange} />
+      {editor}
     </section>
   );
 }

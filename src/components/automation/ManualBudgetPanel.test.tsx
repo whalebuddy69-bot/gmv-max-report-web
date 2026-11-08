@@ -102,6 +102,42 @@ describe("manual budget UI guardrails", () => {
     expect(html).not.toContain("เพิ่มงบ</button>");
     expect(html).not.toContain("ลดงบ</button>");
   });
+
+  it("shows current Daily budget and Daily Ceiling around the Auto slot without offering a write before Sync", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["automation", "budget-status", 17, PILOT_BUDGET_CLIENT_ID], { ...status, capEditAllowed: true });
+    const slot = vi.fn(() => <div>Auto budget slot</div>);
+    const write = vi.spyOn(http, "post");
+    const html = renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <ManualBudgetPanel variant="campaign-form" renderBetweenBudgetAndCeiling={slot} userId={17} clients={[client]} active={false} onRefreshCampaign={() => {}} />
+    </QueryClientProvider>);
+    expect(html.indexOf("Daily budget")).toBeLessThan(html.indexOf("Auto budget slot"));
+    expect(html.indexOf("Auto budget slot")).toBeLessThan(html.indexOf("Daily Ceiling"));
+    expect(html).toContain('value="1,245.20"');
+    expect(html).toContain('value="9,000.00"');
+    expect(html).toContain("Sync บัญชีนี้ก่อนแก้งบ");
+    expect(html.match(/readonly=""/g)).toHaveLength(2);
+    expect(html).not.toContain("ตรวจงบใหม่");
+    expect(slot).toHaveBeenCalledWith(false);
+    expect(write).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it("allows an inline amount for a verified and synced scope but not for mismatched Creator data", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["automation", "budget-status", 17, PILOT_BUDGET_CLIENT_ID], status);
+    const render = (scoped: AutomationClient) => renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <ManualBudgetPanel variant="campaign-form" userId={17} clients={[scoped]} onRefreshCampaign={() => {}} />
+    </QueryClientProvider>);
+    const budgetMarkup = (html: string) => html.slice(0, html.indexOf("Daily Ceiling"));
+    expect(budgetMarkup(render(client))).not.toContain('readonly=""');
+    const wrong = budgetMarkup(render({ ...client, clientId: ASHOP_CAP_CLIENT_ID }));
+    expect(wrong).not.toContain('value="1,245.20"');
+    expect(wrong).toContain('readonly=""');
+    queryClient.clear();
+  });
 });
 
 describe("manual budget API contracts", () => {
