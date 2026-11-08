@@ -253,6 +253,7 @@ function CreatorRow({ client, userId, now, eager, expanded, onToggle, onRefreshC
   const spendPercent = campaign && campaign.spendMinor !== null ? 100 * campaign.spendMinor / campaign.dailyBudgetMinor : null;
   const budgetClientId = isAdditionalBudgetCapClientId(client.clientId) ? client.clientId
     : client.clientId === PILOT_BUDGET_CLIENT_ID && client.budgetControlAvailable !== false ? PILOT_BUDGET_CLIENT_ID : null;
+  const autoClientId = client.clientId === PILOT_BUDGET_CLIENT_ID ? PILOT_BUDGET_CLIENT_ID : verified ? budgetClientId : null;
   const detailId = `automation-creator-detail-${client.clientId}`;
 
   return (
@@ -296,11 +297,12 @@ function CreatorRow({ client, userId, now, eager, expanded, onToggle, onRefreshC
       </div>
       <div id={detailId} hidden={!expanded} className="border-t border-border bg-muted/25 p-3 sm:p-4">
         {expanded && <CreatorDetails client={client} campaign={campaign} />}
-        {budgetClientId && <div className="mt-3">
-          <ManualBudgetPanel key={`${userId}:${budgetClientId}`} userId={userId} clientId={budgetClientId} active={expanded} clients={[client]} onRefreshCampaign={onRefreshCampaign} />
-          {expanded && verified && <AutoBudgetStatusPanel clientId={budgetClientId} userId={userId} campaignId={campaign?.campaignId ?? null} />}
+        {(budgetClientId || (expanded && autoClientId)) && <div className="mt-3">
+          {budgetClientId && <ManualBudgetPanel key={`${userId}:${budgetClientId}`} userId={userId} clientId={budgetClientId} active={expanded} clients={[client]} onRefreshCampaign={onRefreshCampaign} />}
+          {/* Ppan can be stopped even if provider campaign data is temporarily unavailable. */}
+          {expanded && autoClientId && <AutoBudgetStatusPanel clientId={autoClientId} userId={userId} campaignId={campaign?.campaignId ?? null} />}
           {expanded && campaign && budgetClientId === PILOT_BUDGET_CLIENT_ID && <BudgetMeter campaign={campaign} />}
-          {expanded && <ReadOnlyActions budgetPanel />}
+          {expanded && budgetClientId && <ReadOnlyActions budgetPanel />}
         </div>}
         {expanded && campaign ? (
           <div className="mt-3">

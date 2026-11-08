@@ -4,6 +4,7 @@ import { http, request } from "./client";
 
 const instant = z.string().datetime({ offset: true });
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
+const tiktokNumericId = z.string().regex(/^[1-9]\d{5,30}$/);
 const operationId = z.string().uuid();
 const positiveMinor = z.number().int().safe().positive();
 const commandMode = z.enum(["dry-run", "live"]);
@@ -58,6 +59,7 @@ const autoStatusCode = z.string().min(1).max(100);
 const autoPreviewSchema = z.object({
   status: autoStatusCode,
   campaignId: id,
+  liveSessionId: tiktokNumericId.nullable().optional(),
   currentBudgetMinor: positiveMinor,
   spendMinor: z.number().int().safe().nonnegative(),
   thresholdMinor: positiveMinor,
@@ -73,22 +75,33 @@ const autoPreviewSchema = z.object({
 export const budgetAutoStatusSchema = z.object({
   clientId: z.enum(budgetIds),
   mode: z.enum(["disabled", "shadow", "live"]),
+  strategy: z.enum(["continuous", "one-shot"]).optional(),
   grant: z.object({ grantId: operationId, status: autoStatusCode, expiresAt: instant }).nullable(),
+  continuousSession: z.object({
+    sessionId: operationId,
+    status: z.enum(["ARMED", "SENDING", "BLOCKED", "STOPPED"]),
+    startedAt: instant,
+    reason: autoStatusCode.nullable().optional(),
+  }).nullable().optional(),
   preview: autoPreviewSchema.nullable(),
   blockers: z.array(autoStatusCode).max(24),
   canArm: z.boolean().optional(),
   canStop: z.boolean().optional(),
-});
+}).refine((value) => value.strategy !== "continuous" || value.clientId === PILOT_BUDGET_CLIENT_ID,
+"continuous Auto is Ppan-only").refine((value) => value.continuousSession == null
+  || (value.clientId === PILOT_BUDGET_CLIENT_ID && value.strategy === "continuous"), "invalid continuous Auto session scope");
 
-const budgetAutoArmInputSchema = z.object({
-  expectedCampaignId: z.string().regex(/^[1-9]\d{5,30}$/),
+const budgetAutoBaseArmInputSchema = z.object({
+  expectedCampaignId: tiktokNumericId,
   expectedBudgetMinor: positiveMinor,
   expectedPolicyRevision: positiveMinor,
-  durationMinutes: z.number().int().min(10).max(120),
   nativeAutoOff: z.literal(true),
   noConcurrentChanges: z.literal(true),
 }).strict();
+const budgetAutoContinuousArmInputSchema = budgetAutoBaseArmInputSchema.extend({ expectedLiveSessionId: tiktokNumericId });
+const budgetAutoArmInputSchema = budgetAutoBaseArmInputSchema.extend({ durationMinutes: z.number().int().min(10).max(120) });
 const budgetAutoArmResultSchema = z.object({ grantId: operationId, expiresAt: instant });
+const budgetAutoContinuousArmResultSchema = z.object({ sessionId: operationId, startedAt: instant });
 const budgetAutoStopResultSchema = z.object({ stopped: z.boolean() });
 
 export const budgetPreparationSchema = z.object({
@@ -134,6 +147,7 @@ export type BudgetCapResult = z.infer<typeof budgetCapResultSchema>;
 export type BudgetCapStatus = Pick<AutomationBudgetStatus, "clientId" | "cap" | "capEditAllowed">;
 export type BudgetAutoStatus = z.infer<typeof budgetAutoStatusSchema>;
 export type BudgetAutoArmInput = z.infer<typeof budgetAutoArmInputSchema>;
+export type BudgetAutoContinuousArmInput = z.infer<typeof budgetAutoContinuousArmInputSchema>;
 export type BudgetPrepareInput = {
   expectedCampaignId: string;
   expectedBudgetMinor: number;
@@ -179,6 +193,19 @@ export function armBudgetAuto(clientId: BudgetCapClientId, input: BudgetAutoArmI
 export function stopBudgetAuto(clientId: BudgetCapClientId, grantId: string) {
   return request(budgetAutoStopResultSchema, "Automation Auto stop", () =>
     http.post(`${budgetPath(clientId)}/auto/stop`, { grantId: operationId.parse(grantId) }),
+  );
+}
+
+/** Continuous commands are intentionally fixed to Ppan, never a caller-selected Creator. */
+export function armPpanBudgetAutoContinuous(input: BudgetAutoContinuousArmInput) {
+  return request(budgetAutoContinuousArmResultSchema, "Ppan continuous Auto arm", () =>
+    http.post(`${budgetPath(PILOT_BUDGET_CLIENT_ID)}/auto/arm`, budgetAutoContinuousArmInputSchema.parse(input)),
+  );
+}
+
+export function stopPpanBudgetAutoContinuous(sessionId: string) {
+  return request(budgetAutoStopResultSchema, "Ppan continuous Auto stop", () =>
+    http.post(`${budgetPath(PILOT_BUDGET_CLIENT_ID)}/auto/stop`, { sessionId: operationId.parse(sessionId) }),
   );
 }
 
