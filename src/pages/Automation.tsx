@@ -1,28 +1,27 @@
-import { useState } from "react";
+import { lazy, Suspense, useRef, useState } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { Activity, ArrowDown, ArrowUp, ChevronDown, CirclePause, CirclePlay, Clock3, LockKeyhole, RefreshCw } from "lucide-react";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { fetchAutomationOverview, fetchAutomationPerformance, PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationCampaign, type AutomationPerformance } from "@/api/automation";
+import { Activity, ArrowLeft, ArrowRight, ChevronRight, Clock3, History, LockKeyhole, RefreshCw, Settings2, Users } from "lucide-react";
+import { fetchAutomationOverview, fetchAutomationPerformance, PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationCampaign, type AutomationOverview, type AutomationPerformance } from "@/api/automation";
+import type { CampaignControlAction } from "@/api/automationCampaign";
 import { isAdditionalBudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { AutoBudgetStatusPanel } from "@/components/automation/AutoBudgetStatusPanel";
 import { AutoDiagnosticsPanel } from "@/components/automation/AutoDiagnosticsPanel";
 import { CampaignControlPanel } from "@/components/automation/CampaignControlPanel";
+import { CreatorHistoricalPerformance } from "@/components/automation/CreatorHistoricalPerformance";
 import { ManualBudgetPanel } from "@/components/automation/ManualBudgetPanel";
 import { EmptyState, ErrorState, LoadingState } from "@/components/shared/StateViews";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BANGKOK, creatorRowPerformance, formatHour, isFreshAutomationClient, summarizeCreatorPerformance, toHourlyChart, type AutomationMetric } from "@/lib/automation";
-import { formatCompact, formatValue } from "@/lib/format";
+import { formatValue } from "@/lib/format";
 import { useAuthStore } from "@/store/authStore";
 
 const number = new Intl.NumberFormat("th-TH", { maximumFractionDigits: 1 });
+const CreatorHourlyChart = lazy(() => import("@/components/automation/CreatorHourlyChart"));
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, dateStyle: "medium", timeStyle: "short" });
 const formatTime = (date: string | null) => date === null ? "ยังไม่มีข้อมูล" : time.format(new Date(date));
 const SECTION = "min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5";
-const ROW_COLUMNS = "lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1.45fr)_minmax(0,1.45fr)_auto]";
-const ROW_METRICS = "grid min-w-0 grid-cols-2 gap-x-3 gap-y-1.5 min-[420px]:grid-cols-4 lg:grid-cols-2";
-const EAGER_PERFORMANCE_LIMIT = 8;
 const METRICS = {
   spendMinor: { label: "ยอดใช้จ่าย", format: "currency", unit: "บาท" },
   gmvMinor: { label: "GMV", format: "currency", unit: "บาท" },
@@ -81,34 +80,6 @@ function CreatorDetails({ client, campaign }: { client: AutomationClient; campai
   );
 }
 
-const ACTIONS = [
-  { label: "เปิด", icon: CirclePlay },
-  { label: "ปิด/พัก", icon: CirclePause },
-  { label: "เพิ่มงบ", icon: ArrowUp },
-  { label: "ลดงบ", icon: ArrowDown },
-  { label: "Auto", icon: Activity },
-] as const;
-
-export function ReadOnlyActions({ budgetPanel = false }: { budgetPanel?: boolean } = {}) {
-  const actions = budgetPanel ? ACTIONS.filter(({ label }) => label === "เปิด" || label === "ปิด/พัก") : ACTIONS;
-  return (
-    <div className="mt-4 border-t border-border pt-3">
-      <p className="flex items-start gap-1.5 text-xs text-muted-foreground" id="automation-write-disabled">
-        <LockKeyhole className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
-        {budgetPanel ? "เปิด/พักแคมเปญยังไม่เปิดให้ใช้งาน" : "รุ่นนี้อ่านข้อมูลเท่านั้น ปุ่มสั่งงานยังไม่เชื่อม TikTok"}
-      </p>
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {actions.map(({ label, icon: Icon }) => (
-          <Button key={label} type="button" variant="outline" size="sm" disabled aria-describedby="automation-write-disabled">
-            <Icon className="h-3.5 w-3.5" aria-hidden />
-            {label}
-          </Button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export function BudgetMeter({ campaign }: { campaign: AutomationCampaign }) {
   const percent = campaign.spendMinor === null ? null : (campaign.spendMinor / campaign.dailyBudgetMinor) * 100;
   return (
@@ -134,7 +105,7 @@ export function BudgetMeter({ campaign }: { campaign: AutomationCampaign }) {
         </div>
       )}
       <p className="mt-2 text-xs text-muted-foreground">
-        เส้น 80% คือเกณฑ์ยอดใช้ ดูสถานะและผลการสั่งงานได้ในแท็บ Auto
+        เส้น 80% คือเกณฑ์ยอดใช้ Auto ไม่ได้เพิ่มงบเพียงเพราะถึงเส้นนี้
       </p>
     </div>
   );
@@ -186,20 +157,9 @@ function PerformancePanel({ client, result, payload }: {
       ) : (
         <>
           <p className="mt-3 text-xs text-muted-foreground">หน่วย: {metricInfo.unit} · ชั่วโมงตามป้ายเวลาที่ TikTok ส่งมา</p>
-          <div className="mt-2 h-[240px] min-w-0 sm:h-[300px]" role="img" aria-label={`กราฟ ${metricInfo.label} รายชั่วโมง`}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={rows} margin={{ top: 12, right: 14, bottom: 8, left: 2 }}>
-                <CartesianGrid vertical={false} stroke="var(--color-border)" />
-                <XAxis type="number" dataKey="minute" domain={[0, 1439]} ticks={[0, 360, 720, 1080, 1380]} tickFormatter={formatHour} minTickGap={18} tick={{ fontSize: 11 }} />
-                <YAxis width={64} tickFormatter={(value: number) => formatCompact(value, metricInfo.format)} tick={{ fontSize: 11 }} />
-                <Tooltip
-                  labelFormatter={(value: number) => formatHour(value)}
-                  formatter={(value: number) => [formatValue(value, metricInfo.format), metricInfo.label]}
-                />
-                <Line name={metricInfo.label} type="linear" dataKey="value" stroke="var(--color-primary)" strokeWidth={2} connectNulls={false} dot={{ r: 2.5 }} isAnimationActive={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          <Suspense fallback={<p className="mt-2 text-sm text-muted-foreground">กำลังโหลดกราฟ…</p>}>
+            <CreatorHourlyChart rows={rows} label={metricInfo.label} format={metricInfo.format} />
+          </Suspense>
           <details className="mt-2 rounded-md border border-border px-3 py-2 text-sm">
             <summary className="cursor-pointer font-medium">ดูตัวเลขรายชั่วโมง</summary>
             <table className="mt-2 w-full">
@@ -228,27 +188,136 @@ function RowValue({ label, value }: { label: string; value: string }) {
   );
 }
 
-const DETAILS_TABS = [
-  { id: "auto", label: "Auto" },
-  { id: "budget", label: "งบ / เพดาน" },
-  { id: "campaign", label: "แคมเปญ" },
-  { id: "performance", label: "กราฟ" },
-  { id: "account", label: "ข้อมูลบัญชี" },
+const STAGES = [
+  { id: 1, label: "เลือกบัญชี", icon: Users },
+  { id: 2, label: "Sync & ตั้งค่า", icon: Settings2 },
+  { id: 3, label: "Optimize & ดูผล", icon: Activity },
+  { id: 4, label: "ย้อนหลัง", icon: History },
 ] as const;
-type DetailTab = typeof DETAILS_TABS[number]["id"];
+type CreatorStage = 2 | 3 | 4;
+export type AutomationFlow = { clientId: string; stage: CreatorStage } | null;
+type AutomationFlowAction =
+  | { type: "select"; clientId: string }
+  | { type: "clear" }
+  | { type: "navigate"; clientId: string; stage: CreatorStage }
+  | { type: "verified-launch"; clientId: string };
 
-export function CreatorRow({ client, userId, now, eager, expanded, onToggle, onRefreshCampaign }: {
+export function transitionAutomationFlow(flow: AutomationFlow, action: AutomationFlowAction, clients: readonly AutomationClient[]): AutomationFlow {
+  if (action.type === "clear") return null;
+  const known = clients.some((client) => client.clientId === action.clientId);
+  if (action.type === "select") return known ? { clientId: action.clientId, stage: 2 } : flow;
+  // In-flight work from a previously selected account must not move a new
+  // account to another stage when it resolves.
+  if (!flow || flow.clientId !== action.clientId) return flow;
+  if (!known) return null;
+  return { ...flow, stage: action.type === "verified-launch" ? 3 : action.stage };
+}
+
+type SyncedCreator = {
+  clientId: string;
+  advertiserId: string;
+  tiktokAccountId: string;
+  reportingDate: string | null;
+  campaignId: string | null;
+  observedAt: string | null;
+};
+export function syncedCreatorFromOverview(overview: AutomationOverview | null, client: AutomationClient, now: number): SyncedCreator | null {
+  const observed = overview?.clients.find((value) => value.clientId === client.clientId);
+  if (!observed || observed.advertiserId !== client.advertiserId || observed.tiktokAccountId !== client.tiktokAccountId ||
+      !isFreshAutomationClient(observed, now)) return null;
+  return {
+    clientId: observed.clientId, advertiserId: observed.advertiserId, tiktokAccountId: observed.tiktokAccountId,
+    reportingDate: observed.reportingDate, campaignId: observed.campaign?.campaignId ?? null, observedAt: observed.observedAt,
+  };
+}
+
+export function isCurrentCreatorSync(sync: SyncedCreator | null, client: AutomationClient, now: number) {
+  return !!sync && isFreshAutomationClient(client, now) && sync.clientId === client.clientId &&
+    sync.advertiserId === client.advertiserId && sync.tiktokAccountId === client.tiktokAccountId &&
+    sync.reportingDate === client.reportingDate && sync.campaignId === (client.campaign?.campaignId ?? null) &&
+    isFreshAutomationClient({ ...client, observedAt: sync.observedAt }, now);
+}
+
+function StageNavigation({ stage, hasAccount, onStage }: { stage: 1 | CreatorStage; hasAccount: boolean; onStage: (id: 1 | CreatorStage) => void }) {
+  return (
+    <nav aria-label="ขั้นตอน Automation">
+      <ol className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+        {STAGES.map(({ id, label, icon: Icon }) => <li key={id} className="min-w-0">
+          <Button type="button" variant={stage === id ? "secondary" : "outline"} className="h-auto min-h-12 w-full justify-start gap-2 whitespace-normal px-2.5 text-left sm:px-3"
+            disabled={id !== 1 && !hasAccount} aria-current={stage === id ? "step" : undefined} onClick={() => onStage(id)}>
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background text-xs font-semibold">{id}</span>
+            <Icon className="hidden h-4 w-4 shrink-0 md:block" aria-hidden />
+            <span className="min-w-0 break-words">{label}</span>
+          </Button>
+        </li>)}
+      </ol>
+    </nav>
+  );
+}
+
+function CreatorSelection({ clients, now, onSelect }: { clients: AutomationClient[]; now: number; onSelect: (clientId: string) => void }) {
+  const [filter, setFilter] = useState("");
+  const search = filter.trim().toLocaleLowerCase();
+  const visible = search ? clients.filter((client) => [client.displayName, client.clientId, client.advertiserId].some((value) => value.toLocaleLowerCase().includes(search))) : clients;
+  return (
+    <>
+      <Stats clients={clients} now={now} />
+      <section className={SECTION} aria-labelledby="automation-creators">
+        <h2 id="automation-creators" className="text-base font-semibold">เลือกบัญชี Creator</h2>
+        <p className="mt-1 text-sm text-muted-foreground">แสดงทุกบัญชีที่ตั้งค่าไว้ใน Automation · เลือกหนึ่งบัญชีเพื่อ Sync และจัดการ</p>
+        {clients.length > 4 && <label className="mt-3 block text-sm font-medium">
+          ค้นหาบัญชี
+          <input type="search" value={filter} onChange={(event) => setFilter(event.target.value)}
+            placeholder="ชื่อ Creator หรือ Ad Account ID"
+            className="mt-1 min-h-11 w-full rounded-md border border-input bg-background px-3 text-base sm:max-w-sm sm:text-sm" />
+        </label>}
+        {clients.length === 0 ? (
+          <p className="mt-4 rounded-md bg-muted px-3 py-3 text-sm">ยังไม่มีบัญชี Creator ที่ตั้งค่าให้ดูใน Automation</p>
+        ) : visible.length === 0 ? (
+          <p className="mt-4 text-sm text-muted-foreground">ไม่พบชื่อหรือรหัสบัญชีที่ค้นหา</p>
+        ) : (
+          <ul className="mt-3 grid min-w-0 gap-2" aria-label="บัญชี Creator">
+            {visible.map((client) => {
+              const fresh = isFreshAutomationClient(client, now);
+              const active = fresh ? client.campaign : null;
+              return <li key={client.clientId} className="min-w-0">
+                <Button type="button" variant="outline" className="grid h-auto min-h-14 w-full grid-cols-[minmax(0,1fr)_auto] justify-start gap-2 whitespace-normal p-3 text-left sm:grid-cols-[minmax(0,1fr)_auto_auto]"
+                  aria-label={`เลือก ${client.displayName}`} onClick={() => onSelect(client.clientId)}>
+                  <span className="min-w-0">
+                    <span className="block break-words text-sm font-semibold">{client.displayName}</span>
+                    <span className="mt-0.5 block break-words text-xs font-normal text-muted-foreground">{active?.campaignName ?? (fresh ? "ไม่พบแคมเปญที่เปิด" : "ยังไม่ยืนยันสถานะแคมเปญ")}</span>
+                  </span>
+                  <span className="hidden max-w-44 sm:block"><AccessStatus client={client} now={now} /></span>
+                  <ChevronRight className="h-4 w-4 shrink-0" aria-hidden />
+                  <span className="col-span-2 sm:hidden"><AccessStatus client={client} now={now} /></span>
+                </Button>
+              </li>;
+            })}
+          </ul>
+        )}
+      </section>
+    </>
+  );
+}
+
+function SelectedCreatorStages({ client, stage, userId, now, onSync, onStage, onLaunchVerified, onRefreshCampaign }: {
   client: AutomationClient;
+  stage: CreatorStage;
   userId: number;
   now: number;
-  eager: boolean;
-  expanded: boolean;
-  onToggle: () => void;
+  onSync: () => Promise<AutomationOverview | null>;
+  onStage: (id: CreatorStage) => void;
+  onLaunchVerified: () => void;
   onRefreshCampaign: () => void;
 }) {
+  const [sync, setSync] = useState<SyncedCreator | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncFailed, setSyncFailed] = useState(false);
+  const syncLock = useRef(false);
+  const syncValid = isCurrentCreatorSync(sync, client, now);
   const verified = isFreshAutomationClient(client, now);
   const campaign = verified ? client.campaign : null;
-  const performanceEnabled = campaign !== null && (eager || expanded);
+  const performanceEnabled = stage !== 2 && campaign !== null;
   const query = useQuery({
     queryKey: ["automation", "performance", userId, client.clientId, campaign?.campaignId, client.reportingDate],
     queryFn: ({ signal }) => fetchAutomationPerformance(client.clientId, signal),
@@ -256,132 +325,158 @@ export function CreatorRow({ client, userId, now, eager, expanded, onToggle, onR
     gcTime: 0,
     retry: false,
     staleTime: 120_000,
-    refetchInterval: (state) => !performanceEnabled || stopPolling(state.state.error) ? false : 180_000,
+    refetchInterval: (state) => stage !== 3 || !performanceEnabled || stopPolling(state.state.error) ? false : 180_000,
     refetchIntervalInBackground: false,
   });
   const payload = performanceEnabled && query.isSuccess ? creatorRowPerformance(query.data, client, now) : null;
   const totals = payload?.state === "available" && payload.series.length > 0 ? summarizeCreatorPerformance(payload.series) : null;
-  const spendPercent = campaign && campaign.spendMinor !== null ? 100 * campaign.spendMinor / campaign.dailyBudgetMinor : null;
   const budgetClientId = isAdditionalBudgetCapClientId(client.clientId) ? client.clientId
     : client.clientId === PILOT_BUDGET_CLIENT_ID && client.budgetControlAvailable !== false ? PILOT_BUDGET_CLIENT_ID : null;
-  // Stale/missing provider data blocks arming, but must not hide Stop from a
-  // previously armed account. The account-scoped server still checks access.
+  // Stop remains available on Stage 3 even when the campaign disappeared or
+  // when Sync could not confirm fresh numbers. The scoped server checks rights.
   const autoClientId = client.clientId === PILOT_BUDGET_CLIENT_ID ? PILOT_BUDGET_CLIENT_ID : budgetClientId;
-  const detailId = `automation-creator-detail-${client.clientId}`;
-  const [selectedTab, setSelectedTab] = useState<DetailTab | null>(null);
-  const tabs = DETAILS_TABS.filter(({ id }) => id === "auto" ? autoClientId !== null : id === "budget" ? budgetClientId !== null : true);
-  const activeTab = tabs.some(({ id }) => id === selectedTab) ? selectedTab : autoClientId ? "auto" : "account";
-  const panelId = (tab: DetailTab) => `${detailId}-${tab}`;
-  const tabButtonId = (tab: DetailTab) => `${panelId(tab)}-button`;
+  const ppan = client.clientId === PILOT_BUDGET_CLIENT_ID;
+
+  async function syncSelectedAccount() {
+    if (syncLock.current) return;
+    syncLock.current = true;
+    setSync(null); setSyncing(true); setSyncFailed(false);
+    try {
+      const result = syncedCreatorFromOverview(await onSync(), client, Date.now());
+      setSync(result);
+      setSyncFailed(result === null);
+    } catch { setSyncFailed(true); }
+    finally { syncLock.current = false; setSyncing(false); }
+  }
+
+  function verifiedCampaignAction(action: CampaignControlAction) {
+    onRefreshCampaign();
+    if (action === "RESUME") onLaunchVerified();
+  }
 
   return (
-    <li className="min-w-0 rounded-lg border border-border bg-card">
-      <div className={`grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 p-3 sm:gap-x-4 lg:items-center ${ROW_COLUMNS}`}>
-        <div className="min-w-0 self-center">
-          <h3 className="break-words text-base font-semibold">{client.displayName}</h3>
-          <p className="mt-0.5 break-words text-xs text-muted-foreground">{campaign?.campaignName ?? "LIVE GMV Max"}</p>
+    <>
+      {stage === 2 && <section className={SECTION} aria-labelledby="automation-setup">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 id="automation-setup" className="text-base font-semibold">Sync & ตั้งค่า</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Sync เพื่ออ่านข้อมูลล่าสุดของบัญชีนี้ ไม่เปิดแอดและไม่เปลี่ยนงบ</p>
+          </div>
+          <Button type="button" className="min-h-11 w-full sm:w-auto" disabled={syncing} onClick={() => void syncSelectedAccount()}>
+            <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} aria-hidden /> {syncing ? "กำลัง Sync…" : "Sync บัญชีนี้"}
+          </Button>
         </div>
-        <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 lg:col-span-1 lg:flex-col lg:items-start">
-          <AccessStatus client={client} now={now} />
-          <span className="text-xs text-muted-foreground">
-            {campaign ? "แคมเปญเปิดใช้งาน" : verified ? "ไม่พบแคมเปญที่เปิด" : "สถานะแคมเปญยังไม่ยืนยัน"}
-          </span>
+        <div className="mt-3 min-w-0 rounded-lg border border-border bg-muted/30 p-3 text-sm" role="status">
+          {syncValid ? <>
+            <p className="font-medium">Sync สำเร็จ · {client.displayName}</p>
+            <p className="mt-1 break-words text-muted-foreground">{campaign ? campaign.campaignName : "ไม่พบแคมเปญที่เปิดในข้อมูลล่าสุด"} · TikTok อ่านล่าสุด {formatTime(sync?.observedAt ?? null)}</p>
+          </> : <p className="text-muted-foreground">{syncing ? "กำลังตรวจบัญชีและแคมเปญกับระบบ…" :
+            syncFailed ? "ยังยืนยันข้อมูลล่าสุดของบัญชีนี้ไม่ได้ กรุณาลอง Sync อีกครั้ง" :
+              sync ? "ข้อมูลบัญชีหรือแคมเปญเปลี่ยนหรือหมดอายุ กรุณา Sync ใหม่" : "ยังไม่ได้ Sync ในขั้นตอนนี้"}</p>}
         </div>
-        <div className="col-span-2 min-w-0 border-t border-border/60 pt-2 lg:col-span-1 lg:border-0 lg:pt-0">
-          <dl aria-label="งบและการใช้งบ" className={ROW_METRICS}>
-            <RowValue label="งบปัจจุบัน" value={formatValue(campaign ? campaign.dailyBudgetMinor / 100 : null, "currency")} />
-            <RowValue label="ใช้ไป (ประมาณ)" value={formatValue(campaign?.spendMinor != null ? campaign.spendMinor / 100 : null, "currency")} />
-            <RowValue label="ใช้ไป (%)" value={spendPercent !== null ? `${number.format(spendPercent)}%` : "–"} />
-            <RowValue label="ROI Target" value={campaign?.targetRoi != null ? `${number.format(campaign.targetRoi)}×` : "–"} />
-          </dl>
-        </div>
-        <div className="col-span-2 min-w-0 lg:col-span-1">
-          <dl aria-label="Performance" className={ROW_METRICS}>
-            <RowValue label="GMV" value={formatValue(totals?.gmvMinor != null ? totals.gmvMinor / 100 : null, "currency")} />
-            <RowValue label="ออเดอร์" value={formatValue(totals?.orders, "integer")} />
-            <RowValue label="ROI จริง" value={totals?.roi != null ? `${formatValue(totals.roi, "ratio")}×` : "–"} />
-            <RowValue label="LIVE Views" value={formatValue(totals?.liveViews, "integer")} />
-          </dl>
-          {campaign && !totals && <p className="mt-1.5 text-xs text-muted-foreground">
-            {!performanceEnabled ? "เปิดรายละเอียดเพื่อโหลด Performance" : query.isPending ? "กำลังอ่านรายงาน…" : "ยังไม่มีรายงานล่าสุดที่ยืนยันได้"}
-          </p>}
-        </div>
-        <Button type="button" variant={expanded ? "secondary" : "outline"} size="sm" className="col-start-2 row-start-1 min-h-10 justify-self-end lg:col-start-auto lg:row-start-auto"
-          aria-controls={detailId} aria-expanded={expanded} aria-label={`รายละเอียด ${client.displayName}`} onClick={onToggle}>
-          {expanded ? "ปิด" : "จัดการ"} <ChevronDown className={`h-4 w-4 ${expanded ? "rotate-180" : ""}`} aria-hidden />
-        </Button>
-      </div>
-      <div id={detailId} hidden={!expanded} className="border-t border-border bg-muted/25 p-3 sm:p-4">
-        {expanded && <div className="mb-3 flex flex-wrap gap-1" role="group" aria-label={`จัดการ ${client.displayName}`}>
-          {tabs.map(({ id, label }) => <Button key={id} id={tabButtonId(id)} type="button" size="sm"
-            className="min-h-10 px-2.5 sm:px-3" variant={activeTab === id ? "secondary" : "ghost"}
-            aria-pressed={activeTab === id} aria-controls={panelId(id)} onClick={() => setSelectedTab(id)}>{label}</Button>)}
+        {syncValid && <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button type="button" variant="secondary" className="min-h-11 w-full sm:w-auto" onClick={() => onStage(3)}>
+            ไปยัง Optimize & ดูผล <ArrowRight className="h-4 w-4" aria-hidden />
+          </Button>
+          <span className="text-xs text-muted-foreground">ไปดูสถานะได้โดยไม่ส่งคำสั่งเปิดแอด</span>
         </div>}
-        {autoClientId && <div id={panelId("auto")} hidden={!expanded || activeTab !== "auto"} aria-labelledby={tabButtonId("auto")}>
-          {expanded && <AutoBudgetStatusPanel clientId={autoClientId} userId={userId} campaignId={campaign?.campaignId ?? null} />}
-          {expanded && activeTab === "auto" && client.clientId === PILOT_BUDGET_CLIENT_ID &&
-            <div className="mt-3"><AutoDiagnosticsPanel userId={userId} /></div>}
-        </div>}
-        {budgetClientId && <div id={panelId("budget")} hidden={!expanded || activeTab !== "budget"} aria-labelledby={tabButtonId("budget")}>
-          <ManualBudgetPanel key={`${userId}:${budgetClientId}`} userId={userId} clientId={budgetClientId}
-            active={expanded && activeTab === "budget"} clients={[client]} onRefreshCampaign={onRefreshCampaign} />
-          {expanded && activeTab === "budget" && campaign && <BudgetMeter campaign={campaign} />}
-        </div>}
-        <div id={panelId("campaign")} hidden={!expanded || activeTab !== "campaign"} aria-labelledby={tabButtonId("campaign")}>
-          {expanded && activeTab === "campaign" && (client.clientId === PILOT_BUDGET_CLIENT_ID
-            ? <CampaignControlPanel userId={userId} /> : <ReadOnlyActions budgetPanel={budgetClientId !== null} />)}
+        <details className="mt-3 rounded-md border border-border p-3">
+          <summary className="cursor-pointer text-sm font-medium">ข้อมูลบัญชีและรหัสแคมเปญ</summary>
+          <div className="mt-2"><CreatorDetails client={client} campaign={campaign} /></div>
+        </details>
+      </section>}
+      {budgetClientId && <details hidden={stage !== 2} className="min-w-0 rounded-xl border border-border bg-card p-3 sm:p-4">
+        <summary className="cursor-pointer text-sm font-semibold">ปรับงบ / ตั้งเพดาน / ตรวจผลรายการเดิม</summary>
+        {!syncValid && <p className="mt-2 text-xs text-muted-foreground">Sync ก่อนปรับงบหรือเพดาน แต่ยังตรวจผลรายการเดิมได้</p>}
+        <div className="mt-3">
+          <ManualBudgetPanel userId={userId} clientId={budgetClientId} active={stage === 2 && syncValid} clients={[client]} onRefreshCampaign={onRefreshCampaign} />
         </div>
-        <div id={panelId("performance")} hidden={!expanded || activeTab !== "performance"} aria-labelledby={tabButtonId("performance")}>
-          {expanded && activeTab === "performance" && (campaign ?
-            <PerformancePanel key={`${campaign.campaignId}:${client.reportingDate}`} client={client} result={query} payload={payload} /> :
-            <p className="text-sm text-muted-foreground">กราฟจะพร้อมเมื่อยืนยันการเข้าถึงและพบแคมเปญที่เปิดอยู่</p>)}
-        </div>
-        <div id={panelId("account")} hidden={!expanded || activeTab !== "account"} aria-labelledby={tabButtonId("account")}>
-          {expanded && activeTab === "account" && <CreatorDetails client={client} campaign={campaign} />}
-        </div>
-      </div>
-    </li>
+      </details>}
+      {stage === 2 && <section className={SECTION} aria-labelledby="automation-launch">
+        <h2 id="automation-launch" className="text-base font-semibold">แคมเปญและการเปิดแอด</h2>
+        <p className="mt-1 flex items-start gap-1.5 text-sm text-muted-foreground">
+          <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          {ppan ? "ยังไม่รองรับสร้างแคมเปญ Creator ใหม่จากหน้านี้ คำสั่งแคมเปญเดิมจะใช้ได้เมื่อระบบรองรับและต้องยืนยันแยก"
+            : "บัญชีนี้ยังไม่รองรับคำสั่งเปิดหรือพักแคมเปญจาก Automation"}
+        </p>
+        {ppan && <div className="mt-3"><CampaignControlPanel userId={userId} actionsEnabled={syncValid}
+          syncedCampaignId={sync?.campaignId} onVerified={verifiedCampaignAction} /></div>}
+      </section>}
+      {stage === 3 && <>
+        <section className={SECTION} aria-labelledby="automation-current">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h2 id="automation-current" className="text-base font-semibold">Performance ล่าสุด</h2>
+              <p className="mt-1 text-xs text-muted-foreground">TikTok อ่านล่าสุด {formatTime(client.observedAt)} · ตัวเลขรายงานอาจล่าช้า ไม่ใช่ยอดเรียลไทม์</p>
+            </div>
+            <Button type="button" variant="outline" size="sm" className="min-h-10" onClick={() => onStage(2)}>ตั้งงบ / เพดาน</Button>
+          </div>
+          {campaign ? <>
+            <p className="mt-3 break-words text-sm font-medium">{campaign.campaignName}</p>
+            <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="งบและ Performance ล่าสุด">
+              <RowValue label="งบปัจจุบัน" value={formatValue(campaign.dailyBudgetMinor / 100, "currency")} />
+              <RowValue label="ยอดใช้ (ประมาณ)" value={formatValue(campaign.spendMinor == null ? null : campaign.spendMinor / 100, "currency")} />
+              <RowValue label="ROI Target" value={campaign.targetRoi == null ? "–" : `${number.format(campaign.targetRoi)}×`} />
+              <RowValue label="GMV" value={formatValue(totals?.gmvMinor == null ? null : totals.gmvMinor / 100, "currency")} />
+              <RowValue label="ROI จริง" value={totals?.roi == null ? "–" : `${formatValue(totals.roi, "ratio")}×`} />
+              <RowValue label="ออเดอร์" value={formatValue(totals?.orders, "integer")} />
+              <RowValue label="LIVE Views" value={formatValue(totals?.liveViews, "integer")} />
+            </dl>
+            <BudgetMeter campaign={campaign} />
+          </> : <p className="mt-3 text-sm text-muted-foreground">{verified ? "ไม่พบแคมเปญที่เปิดอยู่" : "ยังไม่มีข้อมูลล่าสุดที่ยืนยันได้"} · ยังตรวจสถานะ Auto ด้านล่างได้</p>}
+        </section>
+        {autoClientId && <section className={SECTION} aria-labelledby="automation-optimize">
+          <h2 id="automation-optimize" className="mb-2 text-base font-semibold">Ads Optimization</h2>
+          <AutoBudgetStatusPanel clientId={autoClientId} userId={userId} campaignId={campaign?.campaignId ?? null} />
+          {ppan && <div className="mt-3"><AutoDiagnosticsPanel userId={userId} /></div>}
+        </section>}
+        {campaign && <PerformancePanel key={`${campaign.campaignId}:${client.reportingDate}`} client={client} result={query} payload={payload} />}
+      </>}
+      {stage === 4 && <CreatorHistoricalPerformance client={client} result={query} payload={payload} />}
+    </>
   );
 }
 
-export function CreatorRows({ clients, userId, now, onRefreshCampaign }: {
-  clients: AutomationClient[];
+export function AutomationWorkspace({ data, userId, now, onSync, onRefreshCampaign, initialFlow = null }: {
+  data: AutomationOverview;
   userId: number;
   now: number;
+  onSync: () => Promise<AutomationOverview | null>;
   onRefreshCampaign: () => void;
+  initialFlow?: AutomationFlow;
 }) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const eagerIds = new Set(clients.filter((client) => client.campaign !== null && isFreshAutomationClient(client, now))
-    .slice(0, EAGER_PERFORMANCE_LIMIT).map((client) => client.clientId));
+  const [flow, setFlow] = useState<AutomationFlow>(initialFlow);
+  const client = flow ? data.clients.find((row) => row.clientId === flow.clientId) ?? null : null;
+  const stage = client && flow ? flow.stage : 1;
+  function dispatch(action: AutomationFlowAction) {
+    setFlow((current) => transitionAutomationFlow(current, action, data.clients));
+  }
+  function changeStage(id: 1 | CreatorStage) {
+    if (id === 1) dispatch({ type: "clear" });
+    else if (client) dispatch({ type: "navigate", clientId: client.clientId, stage: id });
+  }
 
   return (
-    <section className={SECTION} aria-labelledby="automation-creators">
-      <h2 id="automation-creators" className="text-base font-semibold">จัดการ Creator</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        เลือกจัดการเพื่อดู Auto งบ และกราฟ · แคมเปญเปิดอยู่ไม่ได้แปลว่ากำลังไลฟ์
-      </p>
-      {clients.length === 0 ? (
-        <p className="mt-4 rounded-md bg-muted px-3 py-3 text-sm">ยังไม่มีบัญชี Creator ที่ตั้งค่าให้ดูใน Automation</p>
-      ) : (
-        <>
-          <div className={`mt-4 hidden min-w-0 items-center gap-x-4 px-4 pb-2 text-xs font-medium text-muted-foreground lg:grid ${ROW_COLUMNS}`} aria-hidden>
-            <span>Creator / แคมเปญ</span><span>การเข้าถึง / สถานะ</span><span>งบและการใช้งบ</span><span>Performance</span><span className="w-24" />
+    <>
+      <StageNavigation stage={stage} hasAccount={client !== null} onStage={changeStage} />
+      {client && stage !== 1 ? <>
+        <section className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card p-3" aria-label="บัญชีที่เลือก">
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">บัญชีที่เลือก</p>
+            <p className="break-words text-base font-semibold">{client.displayName}</p>
           </div>
-          <ul className="mt-3 grid min-w-0 gap-2 lg:mt-0" aria-label="แถว Creator">
-            {clients.map((client) => (
-              <CreatorRow key={client.clientId} client={client} userId={userId} now={now}
-                eager={eagerIds.has(client.clientId)} expanded={expandedId === client.clientId}
-                onToggle={() => setExpandedId((current) => current === client.clientId ? null : client.clientId)}
-                onRefreshCampaign={onRefreshCampaign} />
-            ))}
-          </ul>
-          <details className="mt-2 text-xs text-muted-foreground">
-            <summary className="w-fit cursor-pointer py-1">วิธีอ่านตัวเลข</summary>
-            <p className="mt-1">Performance รวมเฉพาะชั่วโมงที่ TikTok ส่งมา · ROI จริง = GMV ÷ ยอดใช้ของชั่วโมงชุดเดียวกัน · ขีดหมายถึงยังไม่มีข้อมูล ไม่ใช่ศูนย์</p>
-          </details>
-        </>
-      )}
-    </section>
+          <div className="flex flex-wrap items-center gap-2">
+            <AccessStatus client={client} now={now} />
+            <Button type="button" variant="ghost" size="sm" className="min-h-10" onClick={() => changeStage(1)}>
+              <ArrowLeft className="h-4 w-4" aria-hidden /> เปลี่ยนบัญชี
+            </Button>
+          </div>
+        </section>
+        <SelectedCreatorStages key={`${userId}:${client.clientId}`} client={client} stage={stage} userId={userId} now={now}
+          onSync={onSync} onStage={changeStage} onRefreshCampaign={onRefreshCampaign}
+          onLaunchVerified={() => dispatch({ type: "verified-launch", clientId: client.clientId })} />
+      </> : <CreatorSelection clients={data.clients} now={now} onSelect={(clientId) => dispatch({ type: "select", clientId })} />}
+    </>
   );
 }
 
@@ -398,25 +493,31 @@ export function AutomationPage() {
     refetchOnWindowFocus: true,
     refetchInterval: (query) => stopPolling(query.state.error) ? false : 60_000,
   });
-  const data = overview.isSuccess ? overview.data : null;
+  // Transient overview errors must not hide Stop for a selected account.
+  // Revoked credentials are different: do not render retained account data.
+  const data = !stopPolling(overview.error) ? overview.data ?? null : null;
   const now = Date.now();
+  async function syncOverview() {
+    const refreshed = await overview.refetch();
+    return refreshed.isSuccess ? refreshed.data ?? null : null;
+  }
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-muted/35">
-      <div className="mx-auto grid max-w-7xl gap-3 p-3 sm:gap-4 sm:p-6">
+      <div className="mx-auto grid max-w-5xl gap-3 p-3 sm:gap-4 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-semibold tracking-tight">Automation</h1>
               <Badge variant="secondary">Creator · LIVE GMV Max</Badge>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">จัดการงบ แคมเปญ และ Auto ของแต่ละ Creator</p>
+            <p className="mt-1 text-sm text-muted-foreground">เลือกบัญชี ตั้งค่า ดูผล และ Optimize ในหน้าเดียว</p>
           </div>
           <Button type="button" variant="outline" className="min-h-10" onClick={() => void overview.refetch()} disabled={overview.isFetching || stopPolling(overview.error)}>
             <RefreshCw className="h-4 w-4" aria-hidden /> อัปเดตสถานะ
           </Button>
         </div>
-        {overview.isPending ? <LoadingState label="กำลังตรวจสอบสิทธิ์และสถานะแคมเปญ…" /> : overview.isError ? (
+        {overview.isPending ? <LoadingState label="กำลังตรวจสอบสิทธิ์และสถานะแคมเปญ…" /> : overview.isError && !data ? (
           <div className={SECTION}>
             {overview.error instanceof ApiError && overview.error.status === 403 ? (
               <EmptyState title="บัญชีนี้ยังไม่ได้รับสิทธิ์ Automation" description="สิทธิ์ดูรายงานเดิมไม่เท่ากับสิทธิ์ดูข้อมูล Creator กรุณาติดต่อผู้ดูแล" />
@@ -429,8 +530,9 @@ export function AutomationPage() {
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Clock3 className="h-4 w-4" aria-hidden /> ตรวจข้อมูลล่าสุด {formatTime(data.checkedAt)} (เวลาไทย) · อัปเดตประมาณทุก 1 นาที
             </p>
-            <Stats clients={data.clients} now={now} />
-            {userId !== undefined && <CreatorRows key={userId} clients={data.clients} userId={userId} now={now} onRefreshCampaign={() => void overview.refetch()} />}
+            {overview.isError && <p role="status" className="text-xs text-muted-foreground">รีเฟรชภาพรวมไม่สำเร็จ · คำสั่งยังต้องตรวจข้อมูลและสิทธิ์ล่าสุด</p>}
+            {userId !== undefined && <AutomationWorkspace key={userId} data={data} userId={userId} now={now}
+              onSync={syncOverview} onRefreshCampaign={() => void overview.refetch()} />}
           </>
         ) : null}
       </div>

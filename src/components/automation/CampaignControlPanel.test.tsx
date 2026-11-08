@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { campaignControlStatusSchema, previewCampaignControl } from "@/api/automationCampaign";
+import { campaignControlStatusSchema, confirmCampaignControl, isConfirmableCampaignPreview, previewCampaignControl, readCampaignOperation } from "@/api/automationCampaign";
 import { http } from "@/api/client";
 import { parseCampaignRoiTenths } from "./CampaignControlPanel";
 
@@ -38,5 +38,32 @@ describe("Ppan campaign action review", () => {
     await expect(previewCampaignControl({ ...input, expectedStatus: "DISABLE" })).rejects.toThrow();
     await expect(previewCampaignControl({ ...input, targetRoiTenths: 7 })).rejects.toThrow();
     expect(post.mock.calls).toEqual(Array.from({ length: 3 }, () => ["/automation/campaign/preview", input]));
+  });
+
+  it("never confirms a dry run, expired permit, or unexpected permit lifetime", async () => {
+    const post = vi.spyOn(http, "post");
+    const review = { ...preview, mode: "live" as const, operationId: "11111111-1111-4111-8111-111111111111",
+      expiresAt: new Date(Date.now() - 1000).toISOString() };
+    expect(isConfirmableCampaignPreview(review)).toBe(false);
+    await expect(confirmCampaignControl(preview)).rejects.toThrow();
+    await expect(confirmCampaignControl(review)).rejects.toThrow();
+    await expect(confirmCampaignControl({ ...review, expiresAt: new Date(Date.now() + 240_000).toISOString() })).rejects.toThrow();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("sends only the confirmed operation ID and recovers the same operation read-only", async () => {
+    const operationId = "11111111-1111-4111-8111-111111111111";
+    const review = { ...preview, mode: "live" as const, operationId, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+    const output = { operationId, campaignId, action: "PAUSE", status: "APPLIED_VERIFIED", sent: true } as const;
+    const post = vi.spyOn(http, "post").mockResolvedValueOnce({ data: { ...output, sent: false } }).mockResolvedValueOnce({ data: output });
+    const get = vi.spyOn(http, "get").mockResolvedValueOnce({ data: { ...output, campaignId: "2234567890123456" } })
+      .mockResolvedValueOnce({ data: output });
+    await expect(confirmCampaignControl(review)).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    await expect(confirmCampaignControl(review)).resolves.toEqual(output);
+    await expect(readCampaignOperation(operationId, review)).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    await expect(readCampaignOperation(operationId, review)).resolves.toEqual(output);
+    await expect(readCampaignOperation("../../outside")).rejects.toThrow();
+    expect(post.mock.calls).toEqual(Array.from({ length: 2 }, () => ["/automation/campaign/confirm", { operationId, confirmed: true }]));
+    expect(get.mock.calls).toEqual(Array.from({ length: 2 }, () => [`/automation/campaign/operations/${operationId}`]));
   });
 });

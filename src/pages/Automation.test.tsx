@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import { automationOverviewSchema, automationPerformancePath, automationPerformanceSchema, PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
 import { bangkokDay, creatorRowPerformance, isFreshAutomationClient, isStalePerformance, performanceMatchesClient, summarizeCreatorPerformance, toHourlyChart } from "@/lib/automation";
-import { AccessStatus, BudgetMeter, CreatorRow, CreatorRows, ReadOnlyActions } from "./Automation";
+import { AccessStatus, AutomationWorkspace, BudgetMeter, isCurrentCreatorSync, syncedCreatorFromOverview, transitionAutomationFlow, type AutomationFlow } from "./Automation";
 
 const CHECKED = "2026-03-05T17:00:10.000Z";
 const now = Date.parse(CHECKED);
@@ -106,49 +106,85 @@ describe("Automation frontend", () => {
     expect(summarizeCreatorPerformance([])).toEqual({ gmvMinor: null, orders: null, roi: null, liveViews: null });
   });
 
-  it("renders one row per Creator, including pending accounts without another card or chart", () => {
-    const pending: AutomationClient = {
-      ...client, clientId: "other-creator", displayName: "Secondary fixture", access: "unavailable",
-      accessReason: "needs-authorization", campaign: null, reportingDate: null, observedAt: null, tiktokAccountIdVerified: false,
-    };
-    const queryClient = new QueryClient();
-    const html = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <CreatorRows clients={[client, pending]} userId={17} now={now} onRefreshCampaign={() => {}} />
+  const ppan = { ...client, clientId: PILOT_BUDGET_CLIENT_ID, displayName: "Ppan fixture" };
+  const srihiw = { ...client, clientId: "srihiw", displayName: "Srihiw fixture" };
+  const pending: AutomationClient = {
+    ...client, clientId: "other-creator", displayName: "Secondary fixture", access: "unavailable",
+    accessReason: "needs-authorization", campaign: null, reportingDate: null, observedAt: null, tiktokAccountIdVerified: false,
+  };
+  const overview = (clients = [ppan, srihiw, pending]) => automationOverviewSchema.parse({
+    schemaVersion: 1, checkedAt: CHECKED, coverage: "configured-creators-only", clients,
+  });
+  function renderWorkspace(initialFlow: AutomationFlow = null, clients = [ppan, srihiw, pending]) {
+    return renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <AutomationWorkspace data={overview(clients)} userId={17} now={now} initialFlow={initialFlow}
+          onSync={async () => null} onRefreshCampaign={() => {}} />
       </QueryClientProvider>,
     );
-    expect(html.match(/<li /g)).toHaveLength(2);
-    expect(html).toContain("รายละเอียด Secondary fixture");
+  }
+
+  it("starts with all authorized/configured accounts and no visible write controls", () => {
+    const html = renderWorkspace();
+    expect(html).toContain('aria-current="step"');
+    expect(html).toContain("เลือกบัญชี Creator");
+    expect(html).toContain('aria-label="เลือก Ppan fixture"');
+    expect(html).toContain('aria-label="เลือก Srihiw fixture"');
+    expect(html).toContain('aria-label="เลือก Secondary fixture"');
     expect(html).toContain("รออนุญาตบัญชี");
-    expect(html).not.toContain("กราฟยอดใช้จ่าย");
     expect(html).not.toContain("ปรับงบจากเว็บ");
+    expect(html).not.toContain("จัดการแคมเปญ Ppan");
   });
 
-  it("keeps the Auto details out of collapsed supported Creator rows", () => {
-    const html = renderToStaticMarkup(
-      <QueryClientProvider client={new QueryClient()}>
-        <CreatorRows clients={[{ ...client, clientId: PILOT_BUDGET_CLIENT_ID }, { ...client, clientId: "srihiw" }]} userId={17} now={now} onRefreshCampaign={() => {}} />
-      </QueryClientProvider>,
-    );
-    expect(html.match(/<li /g)).toHaveLength(2);
-    expect(html).not.toContain("เพิ่มงบอัตโนมัติ");
-    expect(html).not.toContain("กำลังตรวจสถานะ Auto");
+  it("sets up only the chosen account and Sync never implies launch", () => {
+    const html = renderWorkspace({ clientId: "srihiw", stage: 2 });
+    expect(html).toContain("Sync บัญชีนี้");
+    expect(html).toContain("Srihiw fixture");
+    expect(html).not.toContain("Ppan fixture");
+    expect(html).toContain("ไม่เปิดแอดและไม่เปลี่ยนงบ");
+    expect(html).not.toContain("ไปยัง Optimize &amp; ดูผล");
+    expect(html).not.toContain("จัดการแคมเปญ Ppan");
+    expect(html).not.toContain("Ads Optimization");
+    const ppanHtml = renderWorkspace({ clientId: PILOT_BUDGET_CLIENT_ID, stage: 2 });
+    expect(ppanHtml).toContain("จัดการแคมเปญ Ppan");
+    expect(ppanHtml).not.toContain("ยืนยันและเปิดแคมเปญ");
   });
 
-  it("opens the compact Auto section first without opening the chart or campaign actions", () => {
-    const html = renderToStaticMarkup(
-      <QueryClientProvider client={new QueryClient()}>
-        <CreatorRow client={{ ...client, clientId: "srihiw", access: "unavailable", observedAt: null, campaign: null }} userId={17} now={now}
-          eager={false} expanded onToggle={() => {}} onRefreshCampaign={() => {}} />
-      </QueryClientProvider>,
-    );
-    expect(html).toMatch(/id="automation-creator-detail-srihiw-auto-button"[^>]*aria-pressed="true"/);
-    expect(html).toContain('id="automation-creator-detail-srihiw-budget" hidden=""');
-    expect(html).toContain('id="automation-creator-detail-srihiw-campaign" hidden=""');
-    expect(html).toContain('id="automation-creator-detail-srihiw-performance" hidden=""');
+  it("allows Optimize without fresh Sync so Stop remains reachable even when there is no active campaign", () => {
+    const unavailable = { ...srihiw, access: "unavailable" as const, observedAt: null, campaign: null };
+    const html = renderWorkspace({ clientId: "srihiw", stage: 3 }, [ppan, unavailable, pending]);
+    expect(html).toContain("Ads Optimization");
     expect(html).toContain("กำลังตรวจสถานะ Auto");
-    expect(html).not.toContain("Performance รายชั่วโมง");
-    expect(html).not.toContain("Ad Account ID");
+    expect(html).toContain("ยังไม่มีข้อมูลล่าสุดที่ยืนยันได้");
+    expect(html).not.toContain("กราฟ ยอดใช้จ่าย รายชั่วโมง");
+    expect(html).not.toContain("จัดการแคมเปญ Ppan");
+  });
+
+  it("selects only known accounts, defaults each account to Setup, and ignores delayed navigation from a former account", () => {
+    const clients = [ppan, srihiw];
+    const setup = transitionAutomationFlow(null, { type: "select", clientId: ppan.clientId }, clients);
+    expect(setup).toEqual({ clientId: ppan.clientId, stage: 2 });
+    expect(transitionAutomationFlow(setup, { type: "navigate", clientId: ppan.clientId, stage: 4 }, clients)).toEqual({ clientId: ppan.clientId, stage: 4 });
+    expect(transitionAutomationFlow(setup, { type: "select", clientId: "foreign" }, clients)).toBe(setup);
+    const next = transitionAutomationFlow(setup, { type: "select", clientId: srihiw.clientId }, clients);
+    expect(next).toEqual({ clientId: "srihiw", stage: 2 });
+    expect(transitionAutomationFlow(next, { type: "verified-launch", clientId: ppan.clientId }, clients)).toBe(next);
+    expect(transitionAutomationFlow(next, { type: "verified-launch", clientId: ppan.clientId }, [srihiw])).toBe(next);
+    expect(transitionAutomationFlow(setup, { type: "verified-launch", clientId: ppan.clientId }, clients)).toEqual({ clientId: ppan.clientId, stage: 3 });
+    expect(transitionAutomationFlow(setup, { type: "clear" }, clients)).toBeNull();
+  });
+
+  it("requires an exact verified Sync, rejects stale/changed accounts and campaigns, and distinguishes a verified empty active campaign", () => {
+    const synced = syncedCreatorFromOverview(overview(), ppan, now);
+    expect(synced).toMatchObject({ clientId: ppan.clientId, campaignId: campaign.campaignId });
+    expect(isCurrentCreatorSync(synced, ppan, now)).toBe(true);
+    expect(isCurrentCreatorSync(synced, srihiw, now)).toBe(false);
+    expect(isCurrentCreatorSync(synced, { ...ppan, campaign: { ...campaign, campaignId: "changed" } }, now)).toBe(false);
+    expect(isCurrentCreatorSync(synced, { ...ppan, advertiserId: "changed" }, now)).toBe(false);
+    expect(isCurrentCreatorSync(synced, ppan, now + 181_000)).toBe(false);
+    expect(syncedCreatorFromOverview(overview([srihiw]), ppan, now)).toBeNull();
+    expect(syncedCreatorFromOverview(overview(), pending, now)).toBeNull();
+    expect(syncedCreatorFromOverview(overview([{ ...ppan, campaign: null }]), ppan, now)).toMatchObject({ clientId: ppan.clientId, campaignId: null });
   });
 
   it("orders provider labels, converts satang, and preserves real zero vs unknown gaps", () => {
@@ -171,11 +207,4 @@ describe("Automation frontend", () => {
     expect(over).toContain('aria-valuenow="100"');
   });
 
-  it("renders all five planned actions visibly disabled with a reason", () => {
-    const html = renderToStaticMarkup(<ReadOnlyActions />);
-    expect(html.match(/disabled=""/g)).toHaveLength(5);
-    expect(html).toContain("ปิด/พัก");
-    expect(html).toContain("รุ่นนี้อ่านข้อมูลเท่านั้น");
-    expect(html.match(/aria-describedby="automation-write-disabled"/g)).toHaveLength(5);
-  });
 });
