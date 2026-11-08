@@ -1,5 +1,6 @@
 import { Fragment, useId, useMemo, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowLeftRight, ArrowUp, ArrowUpDown, ChevronDown, Columns3 } from "lucide-react";
+import type { AutomationCampaignToday } from "@/api/automationCampaignsToday";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BANGKOK } from "@/lib/automation";
@@ -11,11 +12,11 @@ const statusColumn = { id: "status", label: "Status", description: "Live หม�
 const groups = [
   {
     id: "setup", label: "Setup", columns: [
+      { id: "viewerBoostBudgetMinor", label: "Viewer Boost", description: "งบเพิ่มผู้ชม", format: "money" },
       { id: "scheduleTime", label: "Schedule time", description: "กำหนดการ (เวลาไทย)" },
       { id: "autoBudget", label: "Auto budget increase", description: "สถานะเพิ่มงบอัตโนมัติ" },
       { id: "totalBudgetMinor", label: "Total Budget", description: "งบที่ตั้งไว้", format: "money" },
       { id: "maxBudgetMinor", label: "Max budget", description: "เพดานงบต่อวัน", format: "money" },
-      { id: "viewerBoostBudgetMinor", label: "Viewer boost budget", description: "งบเพิ่มผู้ชม", format: "money" },
       { id: "roiTarget", label: "ROI Target", description: "เป้าหมาย ROI", format: "ratio" },
     ],
   },
@@ -23,6 +24,7 @@ const groups = [
     id: "performance", label: "Performance", columns: [
       { id: "costMinor", label: "Cost", description: "ค่าโฆษณา", format: "money" },
       { id: "gmvMinor", label: "GMV", description: "มูลค่ายอดขาย", format: "money" },
+      { id: "roiActual", label: "ROI", description: "ROI จริง: GMV ÷ ค่าโฆษณา", format: "ratio" },
       { id: "skuOrders", label: "SKU Order", description: "ออเดอร์ SKU", format: "integer" },
       { id: "costPerOrderMinor", label: "Cost per order", description: "ค่าโฆษณาต่อออเดอร์", format: "money" },
       { id: "liveViews", label: "LIVE views", description: "ยอดชม LIVE", format: "integer" },
@@ -49,9 +51,15 @@ const autoStates = {
 } as const;
 const badgeClass = "px-1.5 py-0 text-[10px] leading-4";
 
+function divideMetric(numerator: number | null | undefined, denominator: number | null | undefined) {
+  return numerator != null && denominator != null && Number.isFinite(numerator) && Number.isFinite(denominator) && denominator > 0
+    ? numerator / denominator : null;
+}
+
 function sortValue(row: CreatorOverviewRow, key: Exclude<SortKey, "displayName">): number | null {
   if (key === "status") return row.active === null ? null : Number(row.active);
   if (key === "autoBudget") return row.autoBudget === null ? null : autoStates[row.autoBudget].order;
+  if (key === "roiActual") return row.roiActual != null && Number.isFinite(row.roiActual) ? row.roiActual : null;
   const value = key === "scheduleTime" ? Date.parse(row.scheduleTime?.startAt ?? "") : row[key];
   return value !== null && Number.isFinite(value) ? value : null;
 }
@@ -104,6 +112,13 @@ function Schedule({ schedule }: { schedule: CreatorOverviewRow["scheduleTime"] }
   </>;
 }
 
+function NumericCell({ column, value }: { column: Extract<OptionalColumn, { format: string }>; value: number | null | undefined }) {
+  if (value == null || !Number.isFinite(value)) return <NoValue />;
+  if (column.format === "money") return formatValue(value / 100, "currency");
+  if (column.format === "ratio") return `${formatValue(value, "ratio")}×`;
+  return formatValue(value, "integer");
+}
+
 function Cell({ column, row }: { column: Column; row: CreatorOverviewRow }) {
   if (column.id === "status") {
     const label = row.active === true ? "Live" : row.active === false ? "Off" : "—";
@@ -116,11 +131,7 @@ function Cell({ column, row }: { column: Column; row: CreatorOverviewRow }) {
     const { label, variant } = autoStates[row.autoBudget];
     return <Badge className={badgeClass} variant={variant}>{label}</Badge>;
   }
-  const value = row[column.id];
-  if (value === null || !Number.isFinite(value)) return <NoValue />;
-  if (column.format === "money") return formatValue(value / 100, "currency");
-  if (column.format === "ratio") return `${formatValue(value, "ratio")}×`;
-  return formatValue(value, "integer");
+  return <NumericCell column={column} value={row[column.id]} />;
 }
 
 function SortButton({ label, description, sortKey, sort, onSort }: {
@@ -172,12 +183,93 @@ function Identity({ row, expanded, panelId, onToggleExpand }: {
 
 const frozenAccount = "sticky left-0 border-r bg-card";
 const frozenStatus = "sticky left-[var(--overview-account-width)] border-r bg-card shadow-[2px_0_4px_0_rgba(15,23,42,0.08)]";
+const accountCell = "z-10 border-b px-1 py-0.5 align-middle sm:px-2";
+const statusCell = "z-10 border-b px-1 py-0.5 align-middle sm:px-1.5";
+
+export type CreatorOverviewExpansionLayout = {
+  panelId: string;
+  totalColumns: number;
+  columns: readonly OptionalColumn[];
+  groupStarts: ReadonlySet<OptionalColumnId>;
+};
+
+function metricCellClass(column: OptionalColumn, { columns, groupStarts }: CreatorOverviewExpansionLayout) {
+  return cn("border-b px-1.5 py-1 align-middle break-words group-hover:bg-muted/35 sm:px-2",
+    "format" in column && "tabular text-right font-medium", groupStarts.has(column.id) && column.id !== columns[0]?.id && "border-l");
+}
+
+/** A toolbar/notice sits in a single full-width row while the campaigns below share the real table columns. */
+export function CreatorOverviewExpansionRow({ layout, anchor = false, children }: {
+  layout: CreatorOverviewExpansionLayout;
+  anchor?: boolean;
+  children: ReactNode;
+}) {
+  return <tr data-overview-row="campaign-toolbar">
+    <td colSpan={layout.totalColumns} className="border-b bg-muted/35 p-0">
+      <div id={anchor ? layout.panelId : undefined} className="sticky left-0 min-w-0 max-w-full px-2.5 py-2 [width:100cqi] sm:px-3">
+        {children}
+      </div>
+    </td>
+  </tr>;
+}
+
+type CampaignDetail = Omit<AutomationCampaignToday, "scheduleStartAt" | "scheduleEndAt"> & {
+  scheduleStartAt?: string | null;
+  scheduleEndAt?: string | null;
+};
+
+function CampaignMetricCell({ column, campaign }: { column: OptionalColumn; campaign: CampaignDetail }) {
+  if (column.id === "scheduleTime") {
+    return <Schedule schedule={campaign.scheduleStartAt ? { startAt: campaign.scheduleStartAt, endAt: campaign.scheduleEndAt ?? null } : null} />;
+  }
+  if (column.id === "autoBudget" || column.id === "maxBudgetMinor") return <NoValue />;
+  const value = (() => {
+    switch (column.id) {
+      case "viewerBoostBudgetMinor": return campaign.viewerBoostBudgetMinor;
+      case "totalBudgetMinor": return campaign.dailyBudgetMinor;
+      case "roiTarget": return campaign.targetRoi;
+      case "costMinor": return campaign.spendMinor;
+      case "gmvMinor": return campaign.gmvMinor;
+      case "roiActual": return campaign.roi;
+      case "skuOrders": return campaign.skuOrders;
+      case "liveViews": return campaign.liveViews;
+      case "costPerOrderMinor": return divideMetric(campaign.spendMinor, campaign.skuOrders);
+      case "costPerLiveViewMinor": return divideMetric(campaign.spendMinor, campaign.liveViews);
+    }
+  })();
+  return <NumericCell column={column} value={value} />;
+}
+
+export function CreatorCampaignAlignedRows<Campaign extends CampaignDetail>({ layout, rows, now, renderIdentity }: {
+  layout: CreatorOverviewExpansionLayout;
+  rows: readonly Campaign[];
+  now: number;
+  renderIdentity: (campaign: Campaign) => ReactNode;
+}) {
+  return <>{rows.map((campaign) => {
+    const isEnabled = campaign.operationStatus === "ENABLE";
+    const ended = isEnabled && campaign.scheduleEndAt != null && Date.parse(campaign.scheduleEndAt) <= now;
+    const live = isEnabled && !ended;
+    const status = campaign.operationStatus === "DELETE" ? "ลบแล้ว" : ended ? "จบแล้ว" : live ? "Live" : "ปิด";
+    return <tr key={campaign.campaignId} className="group bg-muted/20" data-overview-row="campaign">
+      <th scope="row" className={cn(frozenAccount, accountCell, "font-normal")}>
+        {renderIdentity(campaign)}
+      </th>
+      <td className={cn(frozenStatus, statusCell)} data-column="status">
+        <Badge className={badgeClass} variant={live ? "success" : "outline"} title={live ? statusColumn.description : undefined}>{status}</Badge>
+      </td>
+      {layout.columns.map((column) => <td key={column.id} className={metricCellClass(column, layout)} data-column={column.id}>
+        <CampaignMetricCell column={column} campaign={campaign} />
+      </td>)}
+    </tr>;
+  })}</>;
+}
 
 type CreatorOverviewTableProps = {
   rows: readonly CreatorOverviewRow[];
   expanded: ReadonlySet<string>;
   onToggleExpand: (clientId: string) => void;
-  renderExpanded: (row: CreatorOverviewRow) => ReactNode;
+  renderExpanded: (row: CreatorOverviewRow, layout: CreatorOverviewExpansionLayout) => ReactNode;
 };
 
 export function CreatorOverviewTableView({ rows, hidden, sort, expanded, onToggleExpand, renderExpanded, onSort }: CreatorOverviewTableProps & {
@@ -190,7 +282,7 @@ export function CreatorOverviewTableView({ rows, hidden, sort, expanded, onToggl
     .filter(({ columns }) => columns.length > 0);
   const visibleColumns = visibleGroups.flatMap((group) => group.columns);
   const totalColumns = 2 + visibleColumns.length;
-  const groupStarts = new Set(visibleGroups.map(({ columns }) => columns[0]?.id));
+  const groupStarts = new Set(visibleGroups.flatMap(({ columns }) => columns[0] ? [columns[0].id] : []));
   const header = (sortKey: SortKey, label: string, description?: string): ReactNode => <SortButton label={label} description={description} sortKey={sortKey} sort={sort} onSort={onSort} />;
   const hasGroups = visibleColumns.length > 0;
   return <div role="region" aria-label="ตาราง Creator และผลโฆษณา" tabIndex={0}
@@ -207,14 +299,14 @@ export function CreatorOverviewTableView({ rows, hidden, sort, expanded, onToggl
           <th scope="col" rowSpan={hasGroups ? 2 : undefined} aria-sort={sort.key === "displayName" ? sort.direction : undefined} className={cn(frozenAccount, "z-20 border-b px-1.5 py-0.5 align-middle sm:px-2")}>
             {header("displayName", "TikTok account")}
           </th>
-          <th scope="col" rowSpan={hasGroups ? 2 : undefined} aria-sort={sort.key === "status" ? sort.direction : undefined} className={cn(frozenStatus, "z-20 border-b px-1 py-0.5 align-middle sm:px-1.5")}>
+          <th scope="col" rowSpan={hasGroups ? 2 : undefined} aria-sort={sort.key === "status" ? sort.direction : undefined} data-column="status" className={cn(frozenStatus, "z-20 border-b px-1 py-0.5 align-middle sm:px-1.5")}>
             {header("status", statusColumn.label, statusColumn.description)}
           </th>
           {visibleGroups.map(({ id, label, columns }, index) => <th key={id} scope="colgroup" colSpan={columns.length} className={cn("border-b bg-muted/70 px-2 py-1 text-[10px] font-semibold sm:text-[11px]", index > 0 && "border-l")}>
             {label}
           </th>)}
         </tr>
-        {hasGroups && <tr>{visibleColumns.map((column) => <th key={column.id} scope="col" aria-sort={sort.key === column.id ? sort.direction : undefined}
+        {hasGroups && <tr>{visibleColumns.map((column) => <th key={column.id} scope="col" aria-sort={sort.key === column.id ? sort.direction : undefined} data-column={column.id}
           className={cn("border-b bg-card px-1.5 py-0.5 align-middle sm:px-2", "format" in column && "text-right", groupStarts.has(column.id) && column.id !== visibleColumns[0]?.id && "border-l")}>
           {header(column.id, column.label, column.description)}
         </th>)}</tr>}
@@ -223,28 +315,21 @@ export function CreatorOverviewTableView({ rows, hidden, sort, expanded, onToggl
         {rows.map((row) => {
           const isExpanded = expanded.has(row.clientId);
           const panelId = `${panelPrefix}-campaigns-${row.clientId}`;
+          const layout = { panelId, totalColumns, columns: visibleColumns, groupStarts };
           return <Fragment key={row.clientId}>
-            <tr className="group">
-              <th scope="row" className={cn(frozenAccount, "z-10 border-b px-1 py-0.5 align-middle group-last:border-b-0 sm:px-2")}>
+            <tr className="group" data-overview-row="account">
+              <th scope="row" className={cn(frozenAccount, accountCell, "group-last:border-b-0")}>
                 <Identity row={row} expanded={isExpanded} panelId={panelId} onToggleExpand={onToggleExpand} />
               </th>
-              <td className={cn(frozenStatus, "z-10 border-b px-1 py-0.5 align-middle group-last:border-b-0 sm:px-1.5")}>
+              <td className={cn(frozenStatus, statusCell, "group-last:border-b-0")} data-column="status">
                 <Cell column={statusColumn} row={row} />
               </td>
               {visibleColumns.map((column) => <td key={column.id}
-                className={cn("border-b px-1.5 py-1 align-middle break-words group-hover:bg-muted/35 group-last:border-b-0 sm:px-2", "format" in column && "tabular text-right font-medium", groupStarts.has(column.id) && column.id !== visibleColumns[0]?.id && "border-l")}>
+                className={cn(metricCellClass(column, layout), "group-last:border-b-0")} data-column={column.id}>
                 <Cell column={column} row={row} />
               </td>)}
             </tr>
-            {isExpanded && <tr>
-              <td colSpan={totalColumns} className="border-b bg-muted/35 p-0">
-                {/* The table can be wider than its viewport. Anchor the detail
-                    panel to the viewport without changing the summary columns. */}
-                <div id={panelId} className="sticky left-0 min-w-0 max-w-full px-2.5 py-2.5 [width:100cqi] sm:px-3">
-                  {renderExpanded(row)}
-                </div>
-              </td>
-            </tr>}
+            {isExpanded && renderExpanded(row, layout)}
           </Fragment>;
         })}
         {rows.length === 0 && <tr><td colSpan={totalColumns} className="px-3 py-4 text-xs text-muted-foreground">ไม่พบ Creator ที่ตรงกับตัวกรอง</td></tr>}

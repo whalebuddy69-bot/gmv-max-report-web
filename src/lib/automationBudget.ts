@@ -52,7 +52,9 @@ export function budgetCapResultMatches(result: BudgetCapResult, input: BudgetCap
 export function canPrepareBudget(status: AutomationBudgetStatus | null, client: AutomationClient | null, now: number): boolean {
   if (!status?.canPrepare || status.mode === "disabled" || !status.cap || status.cap.locked || !client?.campaign
     || client.clientId !== status.clientId || !isFreshAutomationClient(client, now) || !freshBudgetCap(status, now)
-    || client.campaign.spendMinor === null || client.observedAt === null) return false;
+    || client.observedAt === null) return false;
+  // The dashboard's display spend can lag or be unavailable. The budget API
+  // independently validates exact same-day spend and cap before preparing and sending.
   const age = now - Date.parse(client.observedAt);
   return age >= -MAX_CLOCK_SKEW_MS && age <= MAX_CLIENT_AGE_MS;
 }

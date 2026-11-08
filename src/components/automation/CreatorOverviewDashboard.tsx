@@ -143,10 +143,10 @@ function OverviewPane({ clients, userId, now, onSync, onRefreshCampaign }: {
 
   return <>
     <CreatorOverviewSummary rows={rows} />
-    <CreatorOverviewTable rows={rows} expanded={expanded} onToggleExpand={toggleExpanded} renderExpanded={(row) => {
+    <CreatorOverviewTable rows={rows} expanded={expanded} onToggleExpand={toggleExpanded} renderExpanded={(row, layout) => {
       const client = byId.get(row.clientId);
       return client ? <CreatorAccountCampaigns key={JSON.stringify([userId, client.clientId, client.advertiserId, client.tiktokAccountId])}
-        client={client} userId={userId} now={now} onSync={onSync} onRefreshCampaign={onRefreshCampaign} /> : null;
+        layout={layout} client={client} userId={userId} now={now} onSync={onSync} onRefreshCampaign={onRefreshCampaign} /> : null;
     }} />
     <p className="text-xs leading-relaxed text-muted-foreground">
       ยอดสรุประดับบัญชีใช้ข้อมูลเดิมของแคมเปญที่เปิดอยู่ · กดขยายเพื่อดูแคมเปญที่มี Cost วันนี้แยกกัน · Status “Live” หมายถึงแคมเปญเปิดอยู่ ไม่ยืนยันว่าห้องกำลังไลฟ์ · «—» คือไม่มีข้อมูลหรือยังคำนวณไม่ได้

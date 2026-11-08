@@ -215,7 +215,7 @@ function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onB
     queryFn: async () => resolveCreatorEditSnapshot(await onSync(), client, campaign, Date.now()),
     enabled: maySync,
     staleTime: 0, gcTime: 0, retry: false, refetchOnMount: "always",
-    refetchInterval: (query) => query.state.data ? 90_000 : 30_000,
+    refetchInterval: (query) => query.state.data ? 60_000 : 30_000,
   });
   const currentTime = Math.max(time, autoSync.dataUpdatedAt);
   const latest = maySync && autoSync.isSuccess ? autoSync.data : null;

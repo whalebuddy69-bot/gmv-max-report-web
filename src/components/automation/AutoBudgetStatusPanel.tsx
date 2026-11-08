@@ -1,6 +1,7 @@
-import { useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { Activity, ChevronDown } from "lucide-react";
+import { Activity } from "lucide-react";
+import { AutomationDisclosureBody, AutomationDisclosureRow, AutomationSwitchTrack, automationDisclosureFrame } from "./AutomationDisclosure";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
 import { armBudgetAuto, armBudgetAutoContinuous, fetchBudgetAutoOverviewStatus, fetchBudgetAutoStatus, isContinuousBudgetClientId, stopBudgetAuto, stopBudgetAutoContinuous,
   type BudgetAutoArmInput, type BudgetAutoSpendTrendArmInput, type BudgetAutoVerifiedContinuousArmInput, type BudgetAutoStatus,
@@ -11,7 +12,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BANGKOK, bangkokDay } from "@/lib/automation";
 import { formatBudgetBaht } from "@/lib/automationBudget";
-import { cn } from "@/lib/utils";
 
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, dateStyle: "medium", timeStyle: "short" });
 const blockers = new Map([
@@ -170,18 +170,8 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
   </>;
 }
 
-function CompactAutoRow({ titleId, status, controls }: { titleId?: string; status: ReactNode; controls?: ReactNode }) {
-  return <div className="flex min-h-11 items-center justify-between gap-2" data-layout="compact-auto-row">
-    <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1">
-      <h3 id={titleId} className="text-sm font-semibold">Auto budget increase</h3>
-      <div className="text-xs text-muted-foreground">{status}</div>
-    </div>
-    {controls && <div className="flex shrink-0 items-center gap-0.5">{controls}</div>}
-  </div>;
-}
-
 export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, refresh, onChanged, variant = "panel", blockAutoStart = false,
-  compactTitleId, compactDetailsButton, showCompactDetails = false }: {
+  compactTitleId, compactDetailsId, onToggleCompactDetails, showCompactDetails = false }: {
   data: BudgetAutoStatus;
   campaignId: string | null;
   clientId: BudgetCapClientId;
@@ -191,7 +181,8 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   variant?: "panel" | "campaign-form";
   blockAutoStart?: boolean;
   compactTitleId?: string;
-  compactDetailsButton?: ReactNode;
+  compactDetailsId?: string;
+  onToggleCompactDetails?: () => void;
   showCompactDetails?: boolean;
 }) {
   const [duration, setDuration] = useState("30");
@@ -298,19 +289,17 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   if (!compact && !preview && !stopId && !draft && !notice && !pending) return null;
   return <div className={compact ? "space-y-1.5 text-sm" : "mt-3 space-y-2 border-t border-border pt-3 text-sm"}>
     {compact && <>
-      <CompactAutoRow titleId={compactTitleId} status={pending
+      <AutomationDisclosureRow title="Auto budget increase" titleId={compactTitleId} layout="compact-auto-row"
+        controlsId={compactDetailsId ?? `${durationId}-details`} expanded={showCompactDetails} onToggle={onToggleCompactDetails ?? (() => {})} status={pending
         ? <span role="status">{pending === "stop" ? "กำลังตรวจผลการหยุด…" : "กำลังเปิด Auto…"}</span>
-        : <span>{switchLabel}{!switchState && !stopId ? blockAutoStart ? " · มีรายการงบค้าง" : !campaignId ? " · ยังไม่ยืนยันแคมเปญ" : "" : ""}</span>} controls={<>
-        {switchState !== null ? <button type="button" role="switch" aria-checked={switchState} aria-label="Auto budget increase"
+        : <span>{switchLabel}{!switchState && !stopId ? blockAutoStart ? " · มีรายการงบค้าง" : !campaignId ? " · ยังไม่ยืนยันแคมเปญ" : "" : ""}</span>} trailingControl={
+        switchState !== null ? <button type="button" role="switch" aria-checked={switchState} aria-label="Auto budget increase"
           disabled={pending !== null || needsFreshRead || (switchState ? !stopId : !!stopId || !preview || blockAutoStart || draft !== null || (!continuous && !durationValid))}
           onClick={() => { if (switchState) void stop(); else review(); }}
           className="flex size-11 items-center justify-center rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50">
-          <span aria-hidden className={cn("relative block h-5 w-9 rounded-full transition-colors", switchState ? "bg-primary" : "bg-muted-foreground/40")}>
-            <span className={cn("absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow-sm transition-transform", switchState && "translate-x-4")} />
-          </span>
+          <AutomationSwitchTrack checked={switchState} />
         </button> : <span aria-hidden className="mx-1 h-5 w-9 rounded-full border border-dashed border-muted-foreground/50" />}
-        {compactDetailsButton}
-      </>} />
+      />
       {switchState !== true && stopId && <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null || needsFreshRead} onClick={() => void stop()}>หยุด Auto</Button>}
       {showCompactDetails && !draft && preview && !continuous && <label htmlFor={durationId} className="flex flex-wrap items-center gap-2 border-t pt-2 text-xs text-muted-foreground">
         ระยะเวลาเปิด Auto (10–120 นาที)
@@ -385,28 +374,24 @@ export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = 
   });
   if (!compact && statusUnavailable(query.error)) return null;
   const pendingText = query.isPending ? "กำลังตรวจสถานะ Auto…" : "ยังอ่านสถานะ Auto ไม่ได้";
-  const detailsButton = <Button type="button" size="icon" variant="ghost" className="size-11" aria-label="ดูสถานะและเหตุผลของ Auto"
-    aria-expanded={showDetails} aria-controls={detailsId} onClick={() => setShowDetails((open) => !open)}>
-    <ChevronDown className={cn("size-4 transition-transform", showDetails && "rotate-180")} aria-hidden />
-  </Button>;
+  const toggleDetails = () => setShowDetails((open) => !open);
   const controls = query.isSuccess && <AutoBudgetControls key={`${userId}:${clientId}:${campaignId ?? "none"}`} data={query.data} clientId={clientId}
     campaignId={campaignId} dataUpdatedAt={query.dataUpdatedAt} refresh={query.refetch} variant={variant} blockAutoStart={blockAutoStart}
-    compactTitleId={titleId} compactDetailsButton={compact ? detailsButton : undefined} showCompactDetails={showDetails}
+    compactTitleId={titleId} compactDetailsId={detailsId} onToggleCompactDetails={toggleDetails} showCompactDetails={showDetails}
     onChanged={() => {
       // In summary mode the current query and overview are the same; the control's immediate refresh is enough.
       if (!readCompactSummary) void invalidateOtherAutoBudgetViews(queryClient, userId, clientId, campaignId);
     }} />;
-  if (compact) return <section className="min-w-0 rounded-lg border border-border bg-card px-3 sm:px-4" aria-labelledby={titleId}>
-    {controls || <CompactAutoRow titleId={titleId} status={<span role="status">{pendingText}</span>} controls={detailsButton} />}
-    <div id={detailsId} hidden={!showDetails} className="space-y-1.5 border-t border-border py-2 text-xs text-muted-foreground">
-      {showDetails && <>
+  if (compact) return <section className={automationDisclosureFrame} aria-labelledby={titleId}>
+    {controls || <AutomationDisclosureRow title="Auto budget increase" titleId={titleId} layout="compact-auto-row"
+      status={<span role="status">{pendingText}</span>} controlsId={detailsId} expanded={showDetails} onToggle={toggleDetails} />}
+    <AutomationDisclosureBody id={detailsId} expanded={showDetails} className="space-y-1.5 text-xs text-muted-foreground">
         <p>ใช้ถึง 80% → เพิ่มงบ 20% เมื่อผ่านเพดานและเงื่อนไขความปลอดภัย</p>
         <p>ยอดใช้จากรายงานอาจล่าช้า และไม่ได้ยืนยันว่ากำลังไลฟ์อยู่</p>
         {blockAutoStart && <p>จัดการรายการงบหรือเพดานที่ค้างก่อนเปิด Auto</p>}
         {readCompactSummary ? <p>ต้องยืนยันแคมเปญที่เปิดอยู่ก่อนเปิด Auto</p>
           : query.isSuccess && <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />}
-      </>}
-    </div>
+    </AutomationDisclosureBody>
   </section>;
 
   return <section className="mt-3 min-w-0 rounded-lg border border-border bg-card p-3.5 sm:p-4" aria-labelledby={titleId}>

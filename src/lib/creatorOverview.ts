@@ -16,6 +16,7 @@ export type CreatorOverviewRow = {
   maxBudgetMinor: number | null;
   viewerBoostBudgetMinor: number | null;
   roiTarget: number | null;
+  roiActual?: number | null;
   costMinor: number | null;
   gmvMinor: number | null;
   skuOrders: number | null;
@@ -53,6 +54,7 @@ export function buildCreatorOverviewRow(client: AutomationClient, source: {
   const performance = creatorRowPerformance(source.performance, client, now);
   const series = performance?.state === "available" ? performance.series : [];
   const costMinor = totalForReturnedHours(series, "spendMinor");
+  const gmvMinor = totalForReturnedHours(series, "gmvMinor");
   const skuOrders = totalForReturnedHours(series, "orders");
   const liveViews = totalForReturnedHours(series, "liveViews");
   return {
@@ -69,8 +71,9 @@ export function buildCreatorOverviewRow(client: AutomationClient, source: {
     maxBudgetMinor: source.cap?.clientId === client.clientId ? source.cap.cap?.clientDailyCapMinor ?? null : null,
     viewerBoostBudgetMinor: campaign?.viewerBoostBudgetMinor ?? null,
     roiTarget: campaign?.targetRoi ?? null,
+    roiActual: costMinor !== null && costMinor > 0 && gmvMinor !== null ? gmvMinor / costMinor : null,
     costMinor,
-    gmvMinor: totalForReturnedHours(series, "gmvMinor"),
+    gmvMinor,
     skuOrders,
     costPerOrderMinor: unitCost(costMinor, skuOrders),
     liveViews,

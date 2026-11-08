@@ -3,10 +3,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
 import { ASHOP_CAP_CLIENT_ID, budgetConfirmationSchema, budgetOperationSchema, budgetPreparationSchema, budgetStatusSchema, changeBudgetCap, confirmBudgetChange, fetchAdditionalBudgetCapStatus, fetchBudgetStatus, NNSHOP_CAP_CLIENT_ID, prepareBudgetChange, readBudgetOperation, SRIHIW_CAP_CLIENT_ID, type AutomationBudgetPreparation, type AutomationBudgetStatus, type BudgetCapClientId } from "@/api/automationBudget";
-import { http } from "@/api/client";
+import { ApiError, http } from "@/api/client";
 import { budgetCapResultMatches, budgetResultMatches, canConfirmBudget, canConfirmBudgetCap, canEditBudgetCap, canPrepareBudget, freshBudgetCap, isTerminalBudgetResult, parseBudgetBaht, preparationMatchesRequest, validDirection } from "@/lib/automationBudget";
 import { BudgetCapEditor } from "./BudgetCapEditor";
-import { BudgetOutcome, ManualBudgetPanel, operationStorageKey } from "./ManualBudgetPanel";
+import { budgetPrepareErrorMessage, BudgetOutcome, ManualBudgetPanel, operationStorageKey } from "./ManualBudgetPanel";
 
 const at = "2026-01-03T02:01:00.000Z";
 const now = Date.parse(at);
@@ -29,6 +29,15 @@ const simulated = { operationId, status: "SIMULATED", observedBudgetMinor: null 
 afterEach(() => vi.restoreAllMocks());
 
 describe("manual budget UI guardrails", () => {
+  it("shows distinct actionable messages for provider spend, daily ceiling and a pending write", () => {
+    const failure = (code: string) => new ApiError("Do not show the raw provider error", { code, status: 409 });
+    expect(budgetPrepareErrorMessage(failure("BUDGET_CONTEXT_UNVERIFIED"))).toContain("ยังไม่ได้ส่งคำสั่งปรับงบ");
+    expect(budgetPrepareErrorMessage(failure("BUDGET_BELOW_SPEND"))).toContain("สูงกว่ายอดใช้ล่าสุด");
+    expect(budgetPrepareErrorMessage(failure("BUDGET_CAP_EXCEEDED"))).toContain("Daily Ceiling");
+    expect(budgetPrepareErrorMessage(failure("BUDGET_WRITE_FENCED"))).toContain("ตรวจผลรายการนั้น");
+    expect(budgetPrepareErrorMessage(failure("BUDGET_BASELINE_CHANGED"))).toContain("กำลังโหลดข้อมูลใหม่");
+  });
+
   it("uses exact minor units and refuses ambiguous amounts", () => {
     expect(parseBudgetBaht(" 1,245.20 ")).toBe(124_520);
     expect(parseBudgetBaht("0.01")).toBe(1);
@@ -40,12 +49,12 @@ describe("manual budget UI guardrails", () => {
     expect(validDirection(90, 100, "decrease")).toBe(true);
   });
 
-  it("requires available recent campaign, spend, matching scope, operator permission and cap", () => {
+  it("requires a recent matching campaign, operator permission and cap but lets the server verify spend", () => {
     expect(canPrepareBudget(status, client, now)).toBe(true);
     expect(canPrepareBudget({ ...status, canPrepare: false }, client, now)).toBe(false);
     expect(canPrepareBudget({ ...status, cap: { ...cap, locked: true } }, client, now)).toBe(false);
     expect(canPrepareBudget(status, { ...client, clientId: "other-client" }, now)).toBe(false);
-    expect(canPrepareBudget(status, { ...client, campaign: { ...campaign, spendMinor: null } }, now)).toBe(false);
+    expect(canPrepareBudget(status, { ...client, campaign: { ...campaign, spendMinor: null } }, now)).toBe(true);
     expect(canPrepareBudget(status, { ...client, observedAt: "2026-01-03T01:59:00.000Z" }, now)).toBe(false);
     expect(freshBudgetCap(status, now + 46_000)).toBe(false);
     expect(freshBudgetCap(status, now - 10_000)).toBe(false);
@@ -103,7 +112,7 @@ describe("manual budget UI guardrails", () => {
     expect(html).not.toContain("ลดงบ</button>");
   });
 
-  it("shows current Daily budget and Daily Ceiling around the Auto slot without offering a write before Sync", () => {
+  it("allows a local Daily budget draft before account verification without offering a write or nesting Creator Daily Ceiling", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const queryClient = new QueryClient();
     queryClient.setQueryData(["automation", "budget-status", 17, PILOT_BUDGET_CLIENT_ID], { ...status, capEditAllowed: true });
@@ -113,16 +122,28 @@ describe("manual budget UI guardrails", () => {
       <ManualBudgetPanel variant="campaign-form" renderBetweenBudgetAndCeiling={slot} userId={17} clients={[client]} active={false} onRefreshCampaign={() => {}} />
     </QueryClientProvider>);
     expect(html.indexOf("Daily budget")).toBeLessThan(html.indexOf("Auto budget slot"));
-    expect(html.indexOf("Auto budget slot")).toBeLessThan(html.indexOf("Daily Ceiling"));
+    expect(html).not.toContain("Daily Ceiling");
     expect(html).toContain('value="1,245.20"');
-    expect(html).toContain("฿9,000.00");
-    expect(html).toContain('aria-expanded="false"');
-    expect(html).toContain("ยังไม่ยืนยันแคมเปญล่าสุดสำหรับแก้งบ");
-    expect(html.match(/readonly=""/g)).toHaveLength(1);
+    expect(html).toContain("กำลังยืนยันแคมเปญล่าสุดอัตโนมัติ");
+    expect(html).not.toContain('readonly=""');
     expect(html).not.toContain("แก้เพดานงบ");
     expect(html).not.toContain("ตรวจงบใหม่");
     expect(slot).toHaveBeenCalledWith(false);
     expect(write).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it("lets a scoped campaign draft before policy arrives, but known disabled operators cannot edit", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const queryClient = new QueryClient();
+    const render = () => renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <ManualBudgetPanel variant="campaign-form" userId={17} clients={[client]} onRefreshCampaign={() => {}} />
+    </QueryClientProvider>);
+    expect(render()).toContain("กำลังอ่านเพดานงบล่าสุดอัตโนมัติ");
+    expect(render()).not.toContain('readonly=""');
+    queryClient.setQueryData(["automation", "budget-status", 17, PILOT_BUDGET_CLIENT_ID], { ...status, mode: "disabled", canPrepare: false });
+    expect(render()).toContain("บัญชีนี้ยังไม่ได้เปิดสิทธิ์สั่งปรับงบ");
+    expect(render()).toContain('readonly=""');
     queryClient.clear();
   });
 
@@ -133,9 +154,8 @@ describe("manual budget UI guardrails", () => {
     const render = (scoped: AutomationClient) => renderToStaticMarkup(<QueryClientProvider client={queryClient}>
       <ManualBudgetPanel variant="campaign-form" userId={17} clients={[scoped]} onRefreshCampaign={() => {}} />
     </QueryClientProvider>);
-    const budgetMarkup = (html: string) => html.slice(0, html.indexOf("Daily Ceiling"));
-    expect(budgetMarkup(render(client))).not.toContain('readonly=""');
-    const wrong = budgetMarkup(render({ ...client, clientId: ASHOP_CAP_CLIENT_ID }));
+    expect(render(client)).not.toContain('readonly=""');
+    const wrong = render({ ...client, clientId: ASHOP_CAP_CLIENT_ID });
     expect(wrong).not.toContain('value="1,245.20"');
     expect(wrong).toContain('readonly=""');
     queryClient.clear();

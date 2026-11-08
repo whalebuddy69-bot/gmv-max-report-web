@@ -5,7 +5,9 @@ import { PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation"
 import { fetchScopedCampaignControlStatus } from "@/api/automationCampaign";
 import { automationCampaignsTodayPath, automationCampaignsTodaySchema, fetchAutomationCampaignsToday, type AutomationCampaignToday } from "@/api/automationCampaignsToday";
 import { http } from "@/api/client";
-import { allowedLifecycleIntent, campaignsTodayForClient, CreatorAccountCampaigns, CreatorCampaignBreakdownTable, endedTodayRow, visibleCampaignBreakdown } from "./CreatorCampaignDialog";
+import { buildCreatorOverviewRow } from "@/lib/creatorOverview";
+import { allowedLifecycleIntent, campaignsTodayForClient, CreatorAccountCampaigns, CreatorCampaignBreakdownRows, endedTodayRow, visibleCampaignBreakdown } from "./CreatorCampaignDialog";
+import { CreatorOverviewTableView } from "./CreatorOverviewTable";
 
 const instant = "2026-11-08T07:00:00Z";
 const now = Date.parse(instant) + 500;
@@ -70,10 +72,14 @@ describe("Creator campaign picker", () => {
   it("keeps the create and edit form unmounted until requested from the expanded row", () => {
     const queryClient = new QueryClient();
     const html = renderToStaticMarkup(<QueryClientProvider client={queryClient}>
-      <CreatorAccountCampaigns client={{ ...client, tiktokUsername: "fixture_creator" }} userId={1} now={now} onRefreshCampaign={() => {}} onSync={async () => null} />
+      <CreatorOverviewTableView rows={[buildCreatorOverviewRow(client, {}, now)]} expanded={new Set([client.clientId])} hidden={new Set()}
+        sort={{ key: "displayName", direction: "ascending" }} onToggleExpand={() => {}} onSort={() => {}}
+        renderExpanded={(_row, layout) => <CreatorAccountCampaigns layout={layout} client={{ ...client, tiktokUsername: "fixture_creator" }}
+          userId={1} now={now} onRefreshCampaign={() => {}} onSync={async () => null} />} />
     </QueryClientProvider>);
     expect(html).toContain("@fixture_creator");
-    expect(html).toContain("สร้างแคมเปญ");
+    expect(html).toContain("แบบร่างแคมเปญ");
+    expect(html).toContain("Daily Ceiling");
     expect(html).not.toContain('role="dialog"');
     expect(html).not.toContain("LIVE ROI Target");
     queryClient.clear();
@@ -87,11 +93,14 @@ describe("Creator campaign picker", () => {
       .toEqual([active.campaignId, stopped.campaignId]);
   });
 
-  it("shows campaign, status and Viewer Boost first, with the switch before the name", () => {
-    const html = renderToStaticMarkup(<CreatorCampaignBreakdownTable rows={[{ ...active, skuOrders: 5, liveViews: 20 },
-      { ...stopped, viewerBoostBudgetMinor: 125_000 }]} clientId={client.clientId} now={now} onEdit={() => {}} onLifecycle={() => {}} />);
+  it("shares the Creator headers and places the switch before the campaign name", () => {
+    const html = renderToStaticMarkup(<CreatorOverviewTableView rows={[buildCreatorOverviewRow(client, {}, now)]} expanded={new Set([client.clientId])} hidden={new Set()}
+      sort={{ key: "displayName", direction: "ascending" }} onToggleExpand={() => {}} onSort={() => {}}
+      renderExpanded={(_row, layout) => <CreatorCampaignBreakdownRows layout={layout} rows={[{ ...active, skuOrders: 5, liveViews: 20 },
+        { ...stopped, viewerBoostBudgetMinor: 125_000 }]} clientId={client.clientId} now={now} onEdit={() => {}} onLifecycle={() => {}} />} />);
     expect(html.indexOf('role="switch"')).toBeLessThan(html.indexOf(active.campaignName));
-    expect(html.indexOf(">Campaign Name<")).toBeLessThan(html.indexOf(">Status<"));
+    expect(html.match(/<thead\b/g)).toHaveLength(1);
+    expect(html.indexOf(">TikTok account<")).toBeLessThan(html.indexOf(">Status<"));
     expect(html.indexOf(">Status<")).toBeLessThan(html.indexOf(">Viewer Boost<"));
     expect(html.indexOf(">Viewer Boost<")).toBeLessThan(html.indexOf(">Cost<"));
     for (const item of [active.campaignId, stopped.campaignId, "฿1,000.00", "฿2,500.00", "2.50×", "฿200.00", "฿50.00", "฿1,250.00", ">Live<", ">ปิด<"]) expect(html).toContain(item);

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ComponentProps, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Pencil, RefreshCw } from "lucide-react";
+import { Pencil, RefreshCw } from "lucide-react";
 import { changeBudgetCap, fetchAdditionalBudgetCapStatus, isAdditionalBudgetCapClientId, type AdditionalBudgetCapClientId, type BudgetCapClientId, type BudgetCapStatus } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { BANGKOK } from "@/lib/automation";
 import { budgetCapResultMatches, canConfirmBudgetCap, canEditBudgetCap, formatBudgetBaht, freshBudgetCap, parseBudgetBaht, type BudgetCapReview } from "@/lib/automationBudget";
 import { cn } from "@/lib/utils";
+import { AutomationDisclosureBody, AutomationDisclosureRow, automationDisclosureFrame } from "./AutomationDisclosure";
 
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, timeStyle: "medium" });
 
@@ -125,7 +126,7 @@ export function BudgetCapEditor({
   const editor = (
     <div>
       {compact ? <div className="space-y-1.5">
-        <p className="text-xs text-muted-foreground">เพดานคุมงบรวมต่อวันของ Creator นี้ ไม่ใช่งบที่ส่งให้ TikTok</p>
+        <p className="text-xs text-muted-foreground">เพดานรวมทุกแคมเปญของ Creator นี้ต่อวัน ไม่ใช่งบที่ส่งให้ TikTok</p>
         {!cap && <p className="text-xs text-muted-foreground">{missing}</p>}
         {cap && cap.clientDailyCapMinor !== cap.campaignCapMinor && <p className="text-xs text-muted-foreground">เพดานต่อแคมเปญ {formatBudgetBaht(cap.campaignCapMinor)} · ต่างจากเพดานรวมต่อวัน</p>}
         {cap && <p className="text-xs text-muted-foreground">อ่านล่าสุด {time.format(new Date(cap.readAt))} น. เวลาไทย</p>}
@@ -175,19 +176,12 @@ export function BudgetCapEditor({
   );
 
   if (!compact) return editor;
-  return <section className="min-w-0 rounded-lg border border-border bg-card px-3 sm:px-4" aria-labelledby={headingId}>
-    <button type="button" className="flex min-h-11 w-full min-w-0 items-center justify-between gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait"
-      aria-expanded={showDetails} aria-controls={detailsId} disabled={submitting} onClick={() => setShowDetails((open) => !open)}>
-      <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1">
-        <span id={headingId} className="text-sm font-semibold">Daily Ceiling</span>
-        <span className="text-xs tabular-nums text-muted-foreground" title={cap ? undefined : missing}>{cap ? formatBudgetBaht(cap.clientDailyCapMinor) : "—"}</span>
-        {draft && !showDetails && <span className="text-xs text-muted-foreground">มีแบบร่าง</span>}
-      </span>
-      <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none", showDetails && "rotate-180")} aria-hidden />
-    </button>
-    <div id={detailsId} hidden={!showDetails} className="border-t border-border pb-3 pt-2.5">
-      {showDetails && editor}
-    </div>
+  return <section className={automationDisclosureFrame} aria-labelledby={headingId}>
+    <AutomationDisclosureRow title="Daily Ceiling" titleId={headingId} layout="compact-ceiling-row" status={<>
+      <span title={cap ? undefined : missing}>{cap ? formatBudgetBaht(cap.clientDailyCapMinor) : loading ? "กำลังอ่าน…" : unset ? "ยังไม่ตั้ง" : "—"}</span>
+      {draft && !showDetails && <span> · มีแบบร่าง</span>}
+    </>} expanded={showDetails} controlsId={detailsId} disabled={submitting} onToggle={() => setShowDetails((open) => !open)} />
+    <AutomationDisclosureBody id={detailsId} expanded={showDetails}>{editor}</AutomationDisclosureBody>
   </section>;
 }
 

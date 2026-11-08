@@ -98,12 +98,12 @@ describe("creator overview edit scope", () => {
       <CreatorCampaignEditPanel client={client} campaign={selected} actualRoi={7.3} userId={1} now={now} onBack={() => {}}
         onRefreshCampaign={() => {}} onSync={async () => null} />
     </QueryClientProvider>);
-    const sections = ["ตั้งค่าแคมเปญ", "ROI จริงวันนี้", "LIVE ROI Target", "Daily budget", "Auto budget increase", "Daily Ceiling", "Schedule", "Campaign Name"];
+    const sections = ["ตั้งค่าแคมเปญ", "ROI จริงวันนี้", "LIVE ROI Target", "Daily budget", "Auto budget increase", "Schedule", "Campaign Name"];
     const positions = sections.map((section) => html.indexOf(section));
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
     expect(html).toContain("Daily budget (THB)");
-    expect(html).toContain("Daily Ceiling");
+    expect(html).not.toContain("Daily Ceiling");
     expect(html).toContain("×");
     expect(html).toContain("7.30×");
     expect(html).toContain("กลับไปรายการ");

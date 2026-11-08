@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import type { AutomationCampaignToday } from "@/api/automationCampaignsToday";
 import type { CreatorOverviewRow } from "@/lib/creatorOverview";
-import { CreatorOverviewTable, CreatorOverviewTableView, sortCreatorOverviewRows } from "./CreatorOverviewTable";
+import { CreatorCampaignAlignedRows, CreatorOverviewExpansionRow, CreatorOverviewTable, CreatorOverviewTableView, sortCreatorOverviewRows } from "./CreatorOverviewTable";
 
 const base = {
   clientId: "creator-1",
@@ -24,6 +25,12 @@ const base = {
   costPerLiveViewMinor: null,
 } satisfies CreatorOverviewRow;
 const collapsed = { expanded: new Set<string>(), onToggleExpand: () => {}, renderExpanded: () => null };
+const campaign = {
+  campaignId: "9876543210123456789", campaignName: "Live campaign", operationStatus: "ENABLE", dailyBudgetMinor: 15_000,
+  targetRoi: 4, spendMinor: 2_000, gmvMinor: 5_000, skuOrders: 2, liveViews: 0, viewerBoostBudgetMinor: null,
+  roi: 2.5, activityToday: true, scheduleStartAt: "2026-11-08T00:00:00Z", scheduleEndAt: null,
+} satisfies AutomationCampaignToday;
+const today = Date.parse("2026-11-08T01:00:00Z");
 
 describe("Creator overview sorting", () => {
   it("sorts numerically without mutating input; missing values remain last in either direction", () => {
@@ -86,7 +93,7 @@ describe("Creator overview table", () => {
     expect(html.match(/sticky left-\[var\(--overview-account-width\)\]/g)).toHaveLength(2);
     expect(html.indexOf('aria-label="Status:')).toBeLessThan(html.indexOf('aria-label="Schedule time:'));
     expect(html).toContain("TikTok account และ Status แสดงเสมอ");
-    expect(html.match(/type="checkbox"/g)).toHaveLength(12);
+    expect(html.match(/type="checkbox"/g)).toHaveLength(13);
     expect(html).toContain("1234567890123456789");
     expect(html).toContain("05:00–08:00");
     expect(html).toContain("พัก · ต้องตรวจสอบ");
@@ -97,7 +104,7 @@ describe("Creator overview table", () => {
 
   it("adjusts group spans and keeps TikTok account and Status when other columns are hidden", () => {
     const onlyCost = renderToStaticMarkup(<CreatorOverviewTableView rows={[base]} hidden={new Set([
-      "scheduleTime", "autoBudget", "totalBudgetMinor", "maxBudgetMinor", "viewerBoostBudgetMinor", "roiTarget", "gmvMinor",
+      "scheduleTime", "autoBudget", "totalBudgetMinor", "maxBudgetMinor", "viewerBoostBudgetMinor", "roiTarget", "gmvMinor", "roiActual",
       "skuOrders", "costPerOrderMinor", "liveViews", "costPerLiveViewMinor",
     ])} sort={{ key: "costMinor", direction: "descending" }} {...collapsed} onSort={() => {}} />);
     expect(onlyCost.match(/scope="colgroup"/g)).toHaveLength(1);
@@ -109,7 +116,7 @@ describe("Creator overview table", () => {
     expect(onlyCost).not.toContain("Schedule time");
 
     const onlyAccount = renderToStaticMarkup(<CreatorOverviewTableView rows={[base]} hidden={new Set([
-      "scheduleTime", "autoBudget", "totalBudgetMinor", "maxBudgetMinor", "viewerBoostBudgetMinor", "roiTarget", "costMinor", "gmvMinor",
+      "scheduleTime", "autoBudget", "totalBudgetMinor", "maxBudgetMinor", "viewerBoostBudgetMinor", "roiTarget", "costMinor", "gmvMinor", "roiActual",
       "skuOrders", "costPerOrderMinor", "liveViews", "costPerLiveViewMinor",
     ])} sort={{ key: "displayName", direction: "ascending" }} {...collapsed} onSort={() => {}} />);
     expect(onlyAccount).not.toContain('scope="colgroup"');
@@ -118,19 +125,44 @@ describe("Creator overview table", () => {
     expect(onlyAccount).toContain('aria-label="Status:');
   });
 
-  it("renders the selected account details only, in one full-width row bound to the disclosure", () => {
+  it("renders the selected account toolbar only, in one full-width row bound to the disclosure", () => {
     const another = { ...base, clientId: "another", displayName: "Another Creator" };
-    const renderExpanded = vi.fn((row: CreatorOverviewRow) => <p>{`Campaign table for ${row.clientId}`}</p>);
+    const renderExpanded = vi.fn<React.ComponentProps<typeof CreatorOverviewTable>["renderExpanded"]>((row, layout) =>
+      <CreatorOverviewExpansionRow layout={layout} anchor><p>{`Campaign table for ${row.clientId}`}</p></CreatorOverviewExpansionRow>);
     const html = renderToStaticMarkup(<CreatorOverviewTable rows={[base, another]} {...collapsed}
       expanded={new Set([another.clientId])} renderExpanded={renderExpanded} />);
     expect(renderExpanded).toHaveBeenCalledTimes(1);
-    expect(renderExpanded).toHaveBeenCalledWith(another);
+    expect(renderExpanded).toHaveBeenCalledWith(another, expect.objectContaining({ totalColumns: 15 }));
     expect(html).toMatch(/aria-expanded="true" aria-controls="([^"]+-campaigns-another)"/);
     const id = html.match(/aria-controls="([^"]+)"/)?.[1];
     expect(html).toContain(`id="${id}"`);
-    expect(html).toContain('colSpan="14"');
+    expect(html).toContain('colSpan="15"');
     expect(html).toContain("Campaign table for another");
     expect(html).not.toContain("Campaign table for creator-1");
     expect(html).toContain("[width:100cqi]");
+  });
+
+  it("uses one physical table and the same visible column order for account and campaign", () => {
+    const html = renderToStaticMarkup(<CreatorOverviewTableView rows={[{ ...base, maxBudgetMinor: 55_500, autoBudget: "on", roiActual: 4.2 }]}
+      hidden={new Set(["gmvMinor", "totalBudgetMinor"])} sort={{ key: "displayName", direction: "ascending" }}
+      expanded={new Set([base.clientId])} onToggleExpand={() => {}} onSort={() => {}} renderExpanded={(_row, layout) =>
+        <CreatorCampaignAlignedRows layout={layout} rows={[campaign]} now={today} renderIdentity={(item) => <span>{item.campaignName}</span>} />} />);
+    const main = html.split('data-overview-row="account">')[1]?.split("</tr>")[0] ?? "";
+    const sub = html.split('data-overview-row="campaign">')[1]?.split("</tr>")[0] ?? "";
+    const keys = (row: string) => [...row.matchAll(/data-column="([^"]+)"/g)].map((match) => match[1]);
+    expect(html.match(/<table\b/g)).toHaveLength(1);
+    expect(html.match(/<thead\b/g)).toHaveLength(1);
+    expect(keys(sub)).toEqual(keys(main));
+    expect(keys(sub).slice(0, 3)).toEqual(["status", "viewerBoostBudgetMinor", "scheduleTime"]);
+    expect(keys(sub)).not.toContain("gmvMinor");
+    expect(keys(sub)).not.toContain("totalBudgetMinor");
+    expect(main).toContain("฿555.00");
+    expect(main).toContain("4.20×");
+    expect(sub).not.toContain("฿555.00");
+    expect(sub).toContain("฿20.00");
+    expect(sub).toContain("2.50×");
+    expect(sub).toContain("฿10.00");
+    expect(sub).toMatch(/data-column="liveViews">0</);
+    expect(sub).toMatch(/data-column="costPerLiveViewMinor">.*ไม่มีข้อมูล/);
   });
 });
