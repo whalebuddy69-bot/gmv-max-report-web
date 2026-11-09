@@ -23,6 +23,8 @@ const blockers = new Map([
   ["SPEND_TREND_PENDING", "รอให้ยอดใช้เพิ่มขึ้นจากรอบก่อนก่อนส่งคำสั่ง"],
   ["SPEND_TREND_UNAVAILABLE", "ยังอ่านยอดใช้ของแคมเปญเพื่อเทียบกับรอบก่อนไม่ได้"],
   ["LIVE_DELIVERY_UNVERIFIED", "ยังยืนยันไม่ได้ว่ากำลังไลฟ์และแคมเปญกำลังส่งโฆษณา"],
+  ["LIVE_ROOM_REPORT_STALE", "TikTok ยังรายงานห้อง LIVE ที่เริ่มเกิน 24 ชั่วโมง ระบบยังยืนยันห้องปัจจุบันไม่ได้"],
+  ["LIVE_ROOM_PREDATES_AUTO", "พบห้อง LIVE ที่เริ่มก่อนตั้งรอบนี้ หากต้องการใช้กับห้องปัจจุบัน ให้หยุดรอบรอแล้วเปิด Auto ใหม่เมื่อระบบยืนยันห้องนี้ได้"],
   ["LINE_NOT_READY", "ยังไม่พร้อมส่งแจ้งเตือนทาง LINE สำหรับ Creator นี้"],
   ["WRITE_LOCKED", "มีรายการปรับงบที่ยังต้องตรวจผลก่อนเริ่มรายการใหม่"],
   ["CONTEXT_UNAVAILABLE", "ยังอ่านข้อมูลแคมเปญหรือเพดานไม่ครบ"],
@@ -174,7 +176,7 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
     {session && <p className="mt-2 text-xs text-muted-foreground">สถานะ Auto ต่อเนื่อง: {waiting ? waitingForLiveLabel : continuousLabels[session.status]} · เริ่ม {time.format(new Date(session.startedAt))} (เวลาไทย){sessionReason ? ` · ${sessionReason}` : ""}</p>}
     {data.grant && <p className="mt-2 text-xs text-muted-foreground">รอบ Auto: {grantLabels.get(data.grant.status) ?? "ดูสถานะจากระบบ"} · สิ้นสุดตามกำหนด {time.format(new Date(data.grant.expiresAt))} (เวลาไทย)</p>}
     {preview ? <div className="mt-3 space-y-2">
-      <p className="text-xs font-medium">{previews.get(preview.status) ?? "ยังสรุปผลประเมินไม่ได้"}</p>
+      <p className="text-xs font-medium">{waiting && preview.waitingForLive ? "เปิดแล้ว · รอยืนยันห้อง LIVE" : previews.get(preview.status) ?? "ยังสรุปผลประเมินไม่ได้"}</p>
       {waitingPreview && <p className="text-xs text-muted-foreground">{waitingForLiveRule}</p>}
       <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 text-xs sm:grid-cols-3">
         <Value label="งบแคมเปญปัจจุบัน" value={preview.currentBudgetMinor} />
