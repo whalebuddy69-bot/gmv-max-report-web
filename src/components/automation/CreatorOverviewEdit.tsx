@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, CalendarDays } from "lucide-react";
-import { PILOT_BUDGET_CLIENT_ID, type AutomationCampaign, type AutomationClient, type AutomationOverview } from "@/api/automation";
+import { isMonitoringOnlyCreator, PILOT_BUDGET_CLIENT_ID, type AutomationCampaign, type AutomationClient, type AutomationOverview } from "@/api/automation";
 import { isBudgetCapClientId, type BudgetCapClientId } from "@/api/automationBudget";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -290,6 +290,7 @@ function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onB
 }
 
 export function CreatorCampaignEditPanel(props: CreatorEditPanelProps) {
+  if (isMonitoringOnlyCreator(props.client)) return null;
   const { userId, client, campaign } = props;
   return <CreatorCampaignEditBody key={JSON.stringify([userId, client.clientId, client.advertiserId, client.tiktokAccountId, campaign.campaignId])} {...props} />;
 }

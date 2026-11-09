@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQueries, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { Activity, ChevronDown, History, Users } from "lucide-react";
-import { fetchAutomationPerformance, PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationOverview, type AutomationPerformance } from "@/api/automation";
+import { fetchAutomationPerformance, isMonitoringOnlyCreator, PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationOverview, type AutomationPerformance } from "@/api/automation";
+import type { AutomationCreatorEnrollment } from "@/api/automationLiveDiscovery";
 import { fetchAdditionalBudgetCapStatus, fetchBudgetAutoOverviewStatus, fetchBudgetStatus, isBudgetCapClientId, type BudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
 import { CreatorHistoricalPerformance } from "@/components/automation/CreatorHistoricalPerformance";
@@ -102,7 +103,7 @@ function OverviewPane({ clients, userId, now, onSync, onRefreshCampaign }: {
   onRefreshCampaign: () => void;
 }) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  const budgetClients = clients.filter((client): client is AutomationClient & { clientId: BudgetCapClientId } => isBudgetCapClientId(client.clientId));
+  const budgetClients = clients.filter((client): client is AutomationClient & { clientId: BudgetCapClientId } => !isMonitoringOnlyCreator(client) && isBudgetCapClientId(client.clientId));
   const performance = useQueries({ queries: clients.map((client) => performanceQuery(client, userId, now)) });
   const caps = useQueries({ queries: budgetClients.map(({ clientId }) => ({
     queryKey: ["automation", clientId === PILOT_BUDGET_CLIENT_ID ? "budget-status" : "cap-status", userId, clientId],
@@ -166,6 +167,12 @@ export function CreatorOverviewDashboard({ data, userId, now, onSync, onRefreshC
   const [selection, setSelection] = useState<CreatorSelection>(null);
   const [historyClientId, setHistoryClientId] = useState<string | null>(null);
   const historyClient = data.clients.find(({ clientId }) => clientId === historyClientId) ?? data.clients[0] ?? null;
+  const managedAdvertiserIds = new Set(data.clients.map(({ advertiserId }) => advertiserId));
+  async function onManagedAdded(enrollment: AutomationCreatorEnrollment) {
+    setSelection((current) => current === null ? null : new Set([...current, enrollment.clientId]));
+    const updated = await onSync();
+    return updated?.clients.some(({ clientId, advertiserId }) => clientId === enrollment.clientId && advertiserId === enrollment.advertiserId) === true;
+  }
 
   return <>
     <nav aria-label="มุมมอง Automation" className="flex flex-wrap items-center gap-1">
@@ -177,11 +184,11 @@ export function CreatorOverviewDashboard({ data, userId, now, onSync, onRefreshC
       </Button>
     </nav>
     {tab === "overview" ? <>
-      <LiveCampaignDiscovery key={userId} userId={userId} />
+      <LiveCampaignDiscovery key={userId} userId={userId} managedAdvertiserIds={managedAdvertiserIds} onManagedAdded={onManagedAdded} />
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
         <div>
           <h2 className="text-base font-semibold">บัญชี Creator ที่ตั้งค่าจัดการ</h2>
-          <p className="text-xs text-muted-foreground">เลือกได้หลายบัญชี · กดขยายที่บัญชีเพื่อดูและจัดการรายแคมเปญ</p>
+          <p className="text-xs text-muted-foreground">เลือกได้หลายบัญชี · กดขยายเพื่อดูแคมเปญและคำสั่งที่บัญชีรองรับ</p>
         </div>
         <CreatorFilter clients={data.clients} selection={selection} setSelection={setSelection} />
       </div>

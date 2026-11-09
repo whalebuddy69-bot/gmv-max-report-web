@@ -27,7 +27,8 @@ const clientSchema = z.object({
   clientId: creatorId,
   displayName: label,
   advertiserId: id,
-  tiktokAccountId: id,
+  tiktokAccountId: id.nullable(),
+  monitoringOnly: z.boolean().optional(),
   tiktokUsername: z.string().regex(/^[A-Za-z0-9_.]{1,24}$/).refine((value) => !value.endsWith(".")).nullable().optional(),
   tiktokAccountIdVerified: z.boolean().optional(),
   access: z.enum(["verified", "unavailable"]),
@@ -83,6 +84,10 @@ export type AutomationCampaign = z.infer<typeof campaignSchema>;
 export type AutomationOverview = z.infer<typeof automationOverviewSchema>;
 export type AutomationPerformance = z.infer<typeof automationPerformanceSchema>;
 export type AutomationPoint = z.infer<typeof pointSchema>;
+
+export function isMonitoringOnlyCreator(client: Pick<AutomationClient, "monitoringOnly" | "tiktokAccountId">) {
+  return client.monitoringOnly === true || client.tiktokAccountId === null;
+}
 
 export function fetchAutomationOverview(signal?: AbortSignal) {
   return request(automationOverviewSchema, "Automation overview", () =>

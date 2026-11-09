@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
+import { automationOverviewSchema, PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
 import { fetchScopedCampaignControlStatus } from "@/api/automationCampaign";
 import { automationCampaignsTodayPath, automationCampaignsTodaySchema, fetchAutomationCampaignsToday, type AutomationCampaignToday } from "@/api/automationCampaignsToday";
 import { http } from "@/api/client";
@@ -82,6 +82,25 @@ describe("Creator campaign picker", () => {
     expect(html).toContain("Daily Ceiling");
     expect(html).not.toContain('role="dialog"');
     expect(html).not.toContain("LIVE ROI Target");
+    queryClient.clear();
+  });
+
+  it("keeps monitoring-only daily rows visible without exposing any campaign controls", () => {
+    const readonly = { ...client, tiktokUsername: "fixture_creator", tiktokAccountId: null, monitoringOnly: true };
+    expect(automationOverviewSchema.parse({ schemaVersion: 1, checkedAt: instant, coverage: "configured-creators-only", clients: [readonly] }).clients[0]).toMatchObject({ tiktokAccountId: null, monitoringOnly: true });
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["automation", "campaigns-today", 1, client.clientId, client.advertiserId, null, "2026-11-08"], automationCampaignsTodaySchema.parse(payload), { updatedAt: now });
+    const html = renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <CreatorOverviewTableView rows={[buildCreatorOverviewRow(readonly, {}, now)]} expanded={new Set([client.clientId])} hidden={new Set()}
+        sort={{ key: "displayName", direction: "ascending" }} onToggleExpand={() => {}} onSort={() => {}}
+        renderExpanded={(_row, layout) => <CreatorAccountCampaigns layout={layout} client={readonly}
+          userId={1} now={now} onRefreshCampaign={() => {}} onSync={async () => null} />} />
+    </QueryClientProvider>);
+    expect(html).toContain("@fixture_creator");
+    expect(html).toContain("ติดตามเท่านั้น");
+    expect(html).toContain("Active today");
+    expect(html).toContain("Stopped today");
+    expect(html).not.toMatch(/role="switch"|แก้ไข Active today|แบบร่างแคมเปญ|Daily Ceiling|จัดการ Auto Budget ของบัญชี/);
     queryClient.clear();
   });
 

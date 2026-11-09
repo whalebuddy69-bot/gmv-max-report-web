@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { http, request } from "./client";
+import { ApiError, http, request } from "./client";
 
 const path = "/automation/live-discovery";
 const instant = z.string().datetime({ offset: true });
@@ -28,6 +28,7 @@ export const automationLiveDiscoverySchema = z.object({
   checkedAt: instant.nullable(),
   accountsChecked: z.number().int().min(0).max(1_000),
   accountsTotal: z.number().int().min(0).max(1_000),
+  canAddCreators: z.boolean().optional(),
   campaigns: z.array(discoveredCampaignSchema).max(2_000),
 }).superRefine((snapshot, context) => {
   if (snapshot.accountsChecked > snapshot.accountsTotal) {
@@ -45,6 +46,13 @@ export const automationLiveDiscoverySchema = z.object({
 export type AutomationLiveDiscovery = z.infer<typeof automationLiveDiscoverySchema>;
 export type AutomationDiscoveredLiveCampaign = AutomationLiveDiscovery["campaigns"][number];
 
+const enrollInput = z.object({ advertiserId: providerId, campaignId: providerId, expectedUsername: verifiedUsername }).strict();
+const enrollResult = z.object({
+  clientId: z.string().regex(/^[a-z][a-z0-9_-]{1,39}$/),
+  advertiserId: providerId,
+});
+export type AutomationCreatorEnrollment = z.infer<typeof enrollResult>;
+
 export function fetchAutomationLiveDiscovery(signal?: AbortSignal) {
   return request(automationLiveDiscoverySchema, "LIVE GMV Max discovery", () => http.get(path, { signal }));
 }
@@ -52,5 +60,13 @@ export function fetchAutomationLiveDiscovery(signal?: AbortSignal) {
 export function refreshAutomationLiveDiscovery(signal?: AbortSignal) {
   return request(automationLiveDiscoverySchema, "LIVE GMV Max refresh", () =>
     http.post(`${path}/refresh`, undefined, { signal }),
+  );
+}
+
+export async function enrollDiscoveredCreator(input: z.input<typeof enrollInput>, signal?: AbortSignal) {
+  const parsed = enrollInput.safeParse(input);
+  if (!parsed.success) throw new ApiError("ข้อมูลบัญชีไม่ถูกต้อง", { code: "INVALID_CREATOR_ENROLLMENT" });
+  return request(enrollResult.refine((result) => result.advertiserId === parsed.data.advertiserId), "Creator enrollment", () =>
+    http.post(`${path}/enroll`, parsed.data, { signal }),
   );
 }

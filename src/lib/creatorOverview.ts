@@ -1,4 +1,4 @@
-import type { AutomationClient, AutomationPerformance } from "@/api/automation";
+import { isMonitoringOnlyCreator, type AutomationClient, type AutomationPerformance } from "@/api/automation";
 import type { BudgetAutoStatus, BudgetCapStatus } from "@/api/automationBudget";
 import { creatorRowPerformance, isFreshAutomationClient, totalForReturnedHours } from "@/lib/automation";
 
@@ -6,7 +6,8 @@ export type CreatorOverviewRow = {
   clientId: string;
   displayName: string;
   tiktokUsername?: string | null;
-  tiktokAccountId: string;
+  tiktokAccountId: string | null;
+  monitoringOnly?: boolean;
   access: "verified" | "stale" | "unavailable";
   active: boolean | null;
   campaignName: string | null;
@@ -51,6 +52,7 @@ export function buildCreatorOverviewRow(client: AutomationClient, source: {
 }, now: number): CreatorOverviewRow {
   const fresh = isFreshAutomationClient(client, now);
   const campaign = fresh ? client.campaign : null;
+  const monitoringOnly = isMonitoringOnlyCreator(client);
   const performance = creatorRowPerformance(source.performance, client, now);
   const series = performance?.state === "available" ? performance.series : [];
   const costMinor = totalForReturnedHours(series, "spendMinor");
@@ -62,13 +64,14 @@ export function buildCreatorOverviewRow(client: AutomationClient, source: {
     displayName: client.displayName,
     tiktokUsername: client.tiktokUsername ?? null,
     tiktokAccountId: client.tiktokAccountId,
+    monitoringOnly,
     access: fresh ? "verified" : client.access === "verified" ? "stale" : "unavailable",
     active: fresh ? campaign !== null : null,
     campaignName: campaign?.campaignName ?? null,
     scheduleTime: campaign?.scheduleStartAt ? { startAt: campaign.scheduleStartAt, endAt: campaign.scheduleEndAt ?? null } : null,
-    autoBudget: source.auto?.clientId === client.clientId ? source.auto.overviewState ?? null : null,
+    autoBudget: !monitoringOnly && source.auto?.clientId === client.clientId ? source.auto.overviewState ?? null : null,
     totalBudgetMinor: campaign?.dailyBudgetMinor ?? null,
-    maxBudgetMinor: source.cap?.clientId === client.clientId ? source.cap.cap?.clientDailyCapMinor ?? null : null,
+    maxBudgetMinor: !monitoringOnly && source.cap?.clientId === client.clientId ? source.cap.cap?.clientDailyCapMinor ?? null : null,
     viewerBoostBudgetMinor: campaign?.viewerBoostBudgetMinor ?? null,
     roiTarget: campaign?.targetRoi ?? null,
     roiActual: costMinor !== null && costMinor > 0 && gmvMinor !== null ? gmvMinor / costMinor : null,

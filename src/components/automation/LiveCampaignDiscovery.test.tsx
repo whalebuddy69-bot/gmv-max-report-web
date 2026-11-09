@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   automationLiveDiscoverySchema,
+  enrollDiscoveredCreator,
   fetchAutomationLiveDiscovery,
   refreshAutomationLiveDiscovery,
   type AutomationLiveDiscovery,
@@ -58,6 +59,38 @@ describe("LIVE GMV Max discovery", () => {
     expect(await refreshAutomationLiveDiscovery(signal)).toMatchObject({ state: "refreshing", campaigns: snapshot.campaigns });
     expect(get).toHaveBeenCalledWith("/automation/live-discovery", { signal });
     expect(post).toHaveBeenCalledWith("/automation/live-discovery/refresh", undefined, { signal });
+  });
+
+  it("enrolls only the exact advertiser, campaign and verified username, and checks response binding", async () => {
+    const input = { advertiserId: creator.advertiserId, campaignId: creator.campaignId, expectedUsername: creator.tiktokUsername };
+    const result = { clientId: "creator_fixture", advertiserId: input.advertiserId };
+    const post = vi.spyOn(http, "post").mockResolvedValueOnce({ data: result }).mockResolvedValueOnce({ data: { ...result, advertiserId: "9000000000002" } });
+    const { signal } = new AbortController();
+    await expect(enrollDiscoveredCreator({ ...input, expectedUsername: "@verified.creator" }, signal)).rejects.toMatchObject({ code: "INVALID_CREATOR_ENROLLMENT" });
+    expect(post).not.toHaveBeenCalled();
+    await expect(enrollDiscoveredCreator(input, signal)).resolves.toEqual(result);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith("/automation/live-discovery/enroll", input, { signal });
+    await expect(enrollDiscoveredCreator(input, signal)).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+  });
+
+  it("only offers enrollment for a verified Creator in an unmanaged advertiser with explicit capability", () => {
+    const view = (value: AutomationLiveDiscovery, managedAdvertiserIds = new Set<string>(), refreshing = false) => renderToStaticMarkup(
+      <LiveCampaignDiscoveryContent snapshot={value} error={false} pending={false} refreshing={refreshing} onRefresh={() => {}}
+        managedAdvertiserIds={managedAdvertiserIds} onSelectCreator={() => {}} />,
+    );
+    const available: AutomationLiveDiscovery = { ...snapshot, canAddCreators: true, campaigns: [
+      { ...shop, tiktokUsername: "verified.shop" }, creator,
+      { ...creator, campaignId: "9000000000103", tiktokUsername: null },
+      { ...creator, campaignId: "9000000000104", kind: "unknown", tiktokUsername: "verified.other" },
+    ] };
+    expect(view(available).match(/เพิ่มในบัญชี Creator/g)).toHaveLength(1);
+    const managed = view(available, new Set([ads]));
+    expect(managed).toContain("มีในบัญชี Creator แล้ว");
+    expect(managed).not.toContain("เพิ่มในบัญชี Creator");
+    expect(view(available, new Set(), true)).not.toContain("เพิ่มในบัญชี Creator");
+    expect(view({ ...available, state: "unavailable" })).not.toContain("เพิ่มในบัญชี Creator");
+    expect(view(snapshot)).not.toContain("เพิ่มในบัญชี Creator");
   });
 
   it("groups the advertiser by exact ID, shows Shop identity without inventing a username and never exposes controls", () => {

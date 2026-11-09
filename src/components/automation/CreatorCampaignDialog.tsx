@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ExternalLink, Pencil, Plus, RefreshCw } from "lucide-react";
-import { PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationOverview } from "@/api/automation";
+import { isMonitoringOnlyCreator, PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationOverview } from "@/api/automation";
 import { fetchAutomationCampaignsToday, type AutomationCampaignToday, type AutomationCampaignsToday } from "@/api/automationCampaignsToday";
 import { isBudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
@@ -80,28 +80,29 @@ function CampaignToggle({ row, action, onLifecycle }: {
   </button>;
 }
 
-export function CreatorCampaignBreakdownRows({ layout, rows, clientId, now, onEdit, onLifecycle }: {
+export function CreatorCampaignBreakdownRows({ layout, rows, clientId, now, monitoringOnly = false, onEdit, onLifecycle }: {
   layout: CreatorOverviewExpansionLayout; rows: readonly Row[]; clientId: string; now: number;
+  monitoringOnly?: boolean;
   onEdit: (row: Row, source: HTMLButtonElement) => void; onLifecycle: (row: Row, action: "PAUSE" | "RESUME", source: HTMLButtonElement) => void;
 }) {
   const hasEnabled = rows.some((row) => row.operationStatus === "ENABLE");
   return <CreatorCampaignAlignedRows layout={layout} rows={visibleCampaignBreakdown(rows, now)} now={now} renderIdentity={(row) => <>
     <div className="flex min-w-0 items-center gap-0.5">
-      <CampaignToggle row={row} action={allowedLifecycleIntent(row, clientId, hasEnabled, now)} onLifecycle={onLifecycle} />
+      {!monitoringOnly && <CampaignToggle row={row} action={allowedLifecycleIntent(row, clientId, hasEnabled, now)} onLifecycle={onLifecycle} />}
       <span className="min-w-0 truncate text-[11px] font-semibold leading-tight" title={row.campaignName}>{row.campaignName}</span>
     </div>
     <div className="flex min-w-0 items-center gap-0.5 pl-1">
       <span className="min-w-0 flex-1 truncate font-mono text-[9px] font-normal text-muted-foreground" title={`Campaign ID: ${row.campaignId}`}>{row.campaignId}</span>
-      <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0" aria-label={`แก้ไข ${row.campaignName}`} onClick={(event) => onEdit(row, event.currentTarget)}>
+      {!monitoringOnly && <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0" aria-label={`แก้ไข ${row.campaignName}`} onClick={(event) => onEdit(row, event.currentTarget)}>
         <Pencil className="size-3.5" aria-hidden />
-      </Button>
+      </Button>}
     </div>
   </>} />;
 }
 
 function OptionalAccountAuto({ client, userId }: { client: AutomationClient; userId: number }) {
   const [open, setOpen] = useState(false);
-  if (!isBudgetCapClientId(client.clientId)) return null;
+  if (isMonitoringOnlyCreator(client) || !isBudgetCapClientId(client.clientId)) return null;
   return <details className="rounded-md border bg-card px-2.5" onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary className="min-h-9 cursor-pointer py-2 text-xs font-medium">จัดการ Auto Budget ของบัญชี</summary>
     {open && <div className="pb-2"><AutoBudgetStatusPanel clientId={client.clientId} userId={userId} campaignId={null} variant="campaign-form" /></div>}
@@ -219,7 +220,9 @@ export function CreatorAccountCampaigns({ layout, client, userId, now, onSync, o
   const enabled = rows.filter((row) => !endedTodayRow(row, now));
   const current = enabled.length === 1 ? enabled[0]! : null;
   const accountName = client.tiktokUsername ? `@${client.tiktokUsername}` : client.displayName;
+  const monitoringOnly = isMonitoringOnlyCreator(client);
   function open(next: Screen, source: HTMLElement) {
+    if (monitoringOnly) return;
     trigger.current = source;
     setScreen(next);
   }
@@ -238,17 +241,17 @@ export function CreatorAccountCampaigns({ layout, client, userId, now, onSync, o
         </div>
         <div className="flex w-full min-w-0 flex-wrap items-start gap-2 sm:w-auto">
           <div className="flex items-center gap-1">
-            <Button type="button" size="sm" variant="outline" className="min-h-11 px-2.5" onClick={(event) => open({ type: "create" }, event.currentTarget)}><Plus className="size-4" aria-hidden /> แบบร่างแคมเปญ</Button>
+            {!monitoringOnly && <Button type="button" size="sm" variant="outline" className="min-h-11 px-2.5" onClick={(event) => open({ type: "create" }, event.currentTarget)}><Plus className="size-4" aria-hidden /> แบบร่างแคมเปญ</Button>}
             <Button type="button" variant="ghost" size="sm" className="min-h-11 px-2" aria-label="อัปเดตรายการแคมเปญ"
               disabled={report.isFetching} onClick={refresh}><RefreshCw className={cn("size-4", report.isFetching && "animate-spin")} aria-hidden /></Button>
           </div>
-          {isBudgetCapClientId(client.clientId) && <div className="min-w-44 max-w-full flex-1 sm:min-w-56 sm:flex-none">
+          {!monitoringOnly && isBudgetCapClientId(client.clientId) && <div className="min-w-44 max-w-full flex-1 sm:min-w-56 sm:flex-none">
             <CreatorAccountCeiling clientId={client.clientId} userId={userId} displayName={accountName} />
           </div>}
         </div>
       </section>
     </CreatorOverviewExpansionRow>
-    {visible.length ? <CreatorCampaignBreakdownRows layout={layout} rows={rows} clientId={client.clientId} now={now}
+    {visible.length ? <CreatorCampaignBreakdownRows layout={layout} rows={rows} clientId={client.clientId} now={now} monitoringOnly={monitoringOnly}
       onEdit={(row, source) => open({ type: "edit", id: row.campaignId }, source)}
       onLifecycle={(row, action, source) => open({ type: "lifecycle", row, action }, source)} /> : <CreatorOverviewExpansionRow layout={layout}><p className="text-xs text-muted-foreground">
       {report.isFetching ? "กำลังอ่านแคมเปญ…" : coverage === "complete" ? "ไม่พบแคมเปญเปิดอยู่หรือมี Cost วันนี้" : "ยังอ่านรายการแคมเปญของวันนี้ไม่ครบ"}
@@ -257,14 +260,14 @@ export function CreatorAccountCampaigns({ layout, client, userId, now, onSync, o
       <div className="space-y-2">
         <p className="text-[11px] text-muted-foreground">
           {coverage === "complete" ? "รายงานรายแคมเปญ · เวลาไทย · ตัวเลขอาจมาช้า" : "ข้อมูลรายแคมเปญอาจยังไม่ครบ"}
-          {client.clientId !== PILOT_BUDGET_CLIENT_ID ? " · สวิตช์เปิด–ปิดแคมเปญยังใช้ไม่ได้ในบัญชีนี้" : enabled.length ? " · หากจะเปิดรายการเดิม ต้องปิดแคมเปญที่เปิดอยู่ก่อน" : ""}
+          {monitoringOnly ? " · ติดตามเท่านั้น" : client.clientId !== PILOT_BUDGET_CLIENT_ID ? " · สวิตช์เปิด–ปิดแคมเปญยังใช้ไม่ได้ในบัญชีนี้" : enabled.length ? " · หากจะเปิดรายการเดิม ต้องปิดแคมเปญที่เปิดอยู่ก่อน" : ""}
           {visible.some((row) => row.viewerBoostBudgetMinor == null) && <> · Viewer Boost ที่เป็น — ยังไม่มีข้อมูลยืนยัน <a className="underline underline-offset-2" href={viewerBoostHelp} target="_blank" rel="noopener noreferrer">ดูวิธีตั้งใน TikTok</a></>}
         </p>
-        {client.clientId === PILOT_BUDGET_CLIENT_ID && hasPendingCampaignOperation(userId) && <Button type="button" variant="outline" size="sm" className="min-h-10" onClick={(event) => open({ type: "recovery" }, event.currentTarget)}>ตรวจผลคำสั่งที่ค้าง</Button>}
-        {!enabled.length && <OptionalAccountAuto client={client} userId={userId} />}
+        {!monitoringOnly && client.clientId === PILOT_BUDGET_CLIENT_ID && hasPendingCampaignOperation(userId) && <Button type="button" variant="outline" size="sm" className="min-h-10" onClick={(event) => open({ type: "recovery" }, event.currentTarget)}>ตรวจผลคำสั่งที่ค้าง</Button>}
+        {!monitoringOnly && !enabled.length && <OptionalAccountAuto client={client} userId={userId} />}
       </div>
     </CreatorOverviewExpansionRow>
-    <Dialog open={screen !== null} onOpenChange={(active) => { if (!active) close(); }}>
+    {!monitoringOnly && <Dialog open={screen !== null} onOpenChange={(active) => { if (!active) close(); }}>
       <DialogContent className="inset-x-0 bottom-0 top-auto flex max-h-[calc(100dvh-1rem)] max-w-none translate-x-0 translate-y-0 flex-col rounded-b-none rounded-t-xl p-0 [&>button]:grid [&>button]:size-10 [&>button]:place-items-center sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100%-2rem)] sm:max-w-2xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl"
         onCloseAutoFocus={(event) => { if (trigger.current?.isConnected) { event.preventDefault(); trigger.current.focus({ preventScroll: true }); } }}>
         <div className="flex min-h-0 flex-col">
@@ -299,6 +302,6 @@ export function CreatorAccountCampaigns({ layout, client, userId, now, onSync, o
           </div>
         </div>
       </DialogContent>
-    </Dialog>
+    </Dialog>}
   </>;
 }

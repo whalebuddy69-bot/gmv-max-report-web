@@ -175,7 +175,8 @@ function Identity({ row, expanded, panelId, onToggleExpand }: {
     <ChevronDown className={cn("size-3 text-muted-foreground transition-transform motion-reduce:transition-none", !expanded && "-rotate-90")} aria-hidden />
     <span className="min-w-0">
       <span className="block truncate text-[11px] font-semibold sm:text-xs" title={row.tiktokUsername ? name : `${name} · ยังไม่ยืนยันชื่อผู้ใช้ TikTok`}>{name}</span>
-      <span className="block truncate font-mono text-[9px] font-normal text-muted-foreground tabular sm:text-[10px]" title={row.tiktokAccountId}>{row.tiktokAccountId}</span>
+      {row.tiktokAccountId && <span className="block truncate font-mono text-[9px] font-normal text-muted-foreground tabular sm:text-[10px]" title={row.tiktokAccountId}>{row.tiktokAccountId}</span>}
+      {row.monitoringOnly && <span className="block truncate text-[10px] font-normal text-muted-foreground">ติดตามเท่านั้น</span>}
       <span className="sr-only">{access.label}</span>
     </span>
   </button>;
