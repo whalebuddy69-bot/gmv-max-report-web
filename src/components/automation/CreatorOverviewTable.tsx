@@ -47,7 +47,8 @@ const autoStates = {
   off: { order: 0, label: "ปิด", variant: "outline" },
   blocked: { order: 1, label: "พัก · ต้องตรวจสอบ", variant: "warning" },
   pending: { order: 2, label: "กำลังตรวจสอบ", variant: "warning" },
-  "waiting-for-live": { order: 3, label: "เปิดแล้ว · รอ LIVE", variant: "outline" },
+  "waiting-for-live": { order: 3, label: "เปิดแล้ว · รอ LIVE ใหม่", variant: "outline" },
+  "detecting-live": { order: 3, label: "เปิดแล้ว · กำลังตรวจหาห้อง LIVE", variant: "outline" },
   on: { order: 3, label: "เปิด", variant: "success" },
 } as const;
 const badgeClass = "px-1.5 py-0 text-[10px] leading-4";
