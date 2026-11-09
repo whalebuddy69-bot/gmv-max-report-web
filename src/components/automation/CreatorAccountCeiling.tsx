@@ -23,7 +23,7 @@ export function CreatorAccountCeiling({ clientId, userId, displayName }: {
     refetchInterval: ({ state }) => state.error instanceof ApiError && [401, 403, 404].includes(state.error.status ?? 0) ? false : 25_000,
   });
   return <BudgetCapEditor key={`${userId}:${clientId}`} active clientId={clientId} displayName={displayName}
-    status={query.isSuccess ? query.data : null} loading={query.isPending} variant="campaign-form"
+    status={query.isSuccess ? query.data : null} loading={query.isPending} variant="account-ceiling"
     refreshStatus={() => Promise.all([
       query.refetch(),
       !pilot && queryClient.invalidateQueries({ queryKey: ["automation", "budget-status", userId, clientId], exact: true }),

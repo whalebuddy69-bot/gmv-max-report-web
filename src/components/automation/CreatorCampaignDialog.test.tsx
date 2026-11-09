@@ -112,12 +112,15 @@ describe("Creator campaign picker", () => {
       .toEqual([active.campaignId, stopped.campaignId]);
   });
 
-  it("shares the Creator headers and places the switch before the campaign name", () => {
+  it("shares the Creator headers and places switch, name, ID and edit together in that order", () => {
     const html = renderToStaticMarkup(<CreatorOverviewTableView rows={[buildCreatorOverviewRow(client, {}, now)]} expanded={new Set([client.clientId])} hidden={new Set()}
       sort={{ key: "displayName", direction: "ascending" }} onToggleExpand={() => {}} onSort={() => {}}
       renderExpanded={(_row, layout) => <CreatorCampaignBreakdownRows layout={layout} rows={[{ ...active, skuOrders: 5, liveViews: 20 },
         { ...stopped, viewerBoostBudgetMinor: 125_000 }]} clientId={client.clientId} now={now} onEdit={() => {}} onLifecycle={() => {}} />} />);
-    expect(html.indexOf('role="switch"')).toBeLessThan(html.indexOf(active.campaignName));
+    const identity = html.match(/<div data-campaign-identity\b[^>]*>(.*?)<\/div>/)?.[1] ?? "";
+    const positions = ['role="switch"', `>${active.campaignName}<`, `ดู Campaign ID ${active.campaignId}`, `แก้ไข ${active.campaignName}`].map((piece) => identity.indexOf(piece));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
     expect(html.match(/<thead\b/g)).toHaveLength(1);
     expect(html.indexOf(">TikTok account<")).toBeLessThan(html.indexOf(">Status<"));
     expect(html.indexOf(">Status<")).toBeLessThan(html.indexOf(">Viewer Boost<"));

@@ -84,7 +84,9 @@ describe("LIVE GMV Max discovery", () => {
       { ...creator, campaignId: "9000000000103", tiktokUsername: null },
       { ...creator, campaignId: "9000000000104", kind: "unknown", tiktokUsername: "verified.other" },
     ] };
-    expect(view(available).match(/เพิ่มในบัญชี Creator/g)).toHaveLength(1);
+    const eligible = view(available);
+    expect(eligible.match(/เพิ่มในบัญชี Creator/g)).toHaveLength(1);
+    expect(eligible).toMatch(/<\/details><button[^>]+aria-label="เพิ่มในบัญชี Creator @verified.creator"/);
     const managed = view(available, new Set([ads]));
     expect(managed).toContain("มีในบัญชี Creator แล้ว");
     expect(managed).not.toContain("เพิ่มในบัญชี Creator");
@@ -93,15 +95,19 @@ describe("LIVE GMV Max discovery", () => {
     expect(view(snapshot)).not.toContain("เพิ่มในบัญชี Creator");
   });
 
-  it("groups the advertiser by exact ID, shows Shop identity without inventing a username and never exposes controls", () => {
+  it("shows independent single-line Creator and Seller summaries without inventing a username or exposing controls", () => {
     const html = render();
     expect(html).toContain("LIVE GMV Max ที่เปิดสวิตช์");
     expect(html).toContain("อ่านอย่างเดียว");
     expect(html).toContain("ไม่ได้ยืนยันว่ากำลังไลฟ์หรือส่งโฆษณา");
     expect(html).toContain("การไลฟ์ไม่เพิ่มสิทธิ์จัดการ");
-    expect(html.match(new RegExp(`Ad Account ${ads}`, "g"))).toHaveLength(1);
-    expect(html).toContain("lucide-store");
-    expect(html).toContain("ร้านค้า · ร้านตัวอย่าง");
+    const summaries = html.match(/<summary\b[^>]*>.*?<\/summary>/g);
+    expect(summaries).toHaveLength(2);
+    expect(summaries?.[0]).toMatch(/lucide-store.*ร้านค้า.*ร้านตัวอย่าง.*Fixture LIVE shop.*Synthetic advertiser.*เปิดอยู่/);
+    expect(summaries?.[1]).toMatch(/lucide-user-round.*ครีเอเตอร์.*@verified.creator.*Fixture LIVE creator.*Synthetic advertiser.*เปิดอยู่/);
+    expect(html).toMatch(new RegExp(`Ad Account</dt><dd[^>]*>Synthetic advertiser · <span[^>]*>${ads}`));
+    expect(html).toContain('aria-label="กรองประเภทบัญชี"');
+    expect(html).toMatch(/aria-pressed="true">ทั้งหมด.*aria-pressed="false">Creator.*aria-pressed="false">Seller/);
     expect(html).toContain("ยังไม่ยืนยัน @username");
     expect(html).toContain("@verified.creator");
     expect(html).toContain("เปิดอยู่");
@@ -115,7 +121,7 @@ describe("LIVE GMV Max discovery", () => {
 
   it("labels an unknown Shop without replacing its name with an advertiser label", () => {
     const html = render({ ...snapshot, campaigns: [{ ...shop, shopName: null }] });
-    expect(html).toContain("ร้านค้า · ยังไม่ทราบชื่อ");
+    expect(html).toMatch(/<summary[^>]*>.*lucide-store.*ร้านค้า.*ยังไม่ทราบชื่อร้าน.*<\/summary>/);
     expect(html).toContain(`Shop ID ${shopId}`);
     expect(html).not.toContain("ร้านค้า · Synthetic advertiser");
   });
@@ -125,6 +131,19 @@ describe("LIVE GMV Max discovery", () => {
     expect(filterDiscoveredLiveCampaigns(snapshot.campaigns, shopId)).toEqual([shop]);
     expect(filterDiscoveredLiveCampaigns(snapshot.campaigns, "ร้านตัวอย่าง")).toEqual([shop]);
     expect(filterDiscoveredLiveCampaigns(snapshot.campaigns, ads)).toEqual([shop, creator]);
+  });
+
+  it("keeps unverified types in All only, combines filters with search and shows delivery warnings", () => {
+    const unknown = { ...creator, campaignId: "9000000000103", kind: "unknown", tiktokUsername: "unknown.type",
+      secondaryStatus: "CAMPAIGN_STATUS_BUDGET_EXCEED" } as const;
+    const rows = [shop, creator, unknown];
+    expect(filterDiscoveredLiveCampaigns(rows, "", "all")).toEqual(rows);
+    expect(filterDiscoveredLiveCampaigns(rows, ads, "creator")).toEqual([creator]);
+    expect(filterDiscoveredLiveCampaigns(rows, "ร้านตัวอย่าง", "shop")).toEqual([shop]);
+    expect(filterDiscoveredLiveCampaigns(rows, "unknown.type", "creator")).toEqual([]);
+    expect(filterDiscoveredLiveCampaigns(rows, "unknown.type", "shop")).toEqual([]);
+    const html = render({ ...snapshot, campaigns: rows });
+    expect(html).toMatch(/<summary[^>]*>.*lucide-circle-help.*ไม่ทราบประเภท.*@unknown.type.*lucide-triangle-alert.*งบแคมเปญหมด.*<\/summary>/);
   });
 
   it("uses cached rows during refresh and never reports a partial scan as no live campaigns", () => {

@@ -40,7 +40,7 @@ export function BudgetCapEditor({
   loading: boolean;
   refreshStatus: () => Promise<unknown>;
   onEditingChange?: (editing: boolean) => void;
-  variant?: "campaign-form";
+  variant?: "campaign-form" | "account-ceiling";
 }) {
   const [now, setNow] = useState(Date.now);
   const [draft, setDraft] = useState<{ amount: string; review: BudgetCapReview | null } | null>(null);
@@ -56,7 +56,8 @@ export function BudgetCapEditor({
   const canEdit = active && !blocked && canEditBudgetCap(known, clientId, now);
   const canConfirm = canEdit && !!draft?.review && canConfirmBudgetCap(draft.review, known, clientId, now);
   const unset = known && !known.cap && isAdditionalBudgetCapClientId(clientId);
-  const compact = variant === "campaign-form";
+  const compact = variant === "campaign-form" || variant === "account-ceiling";
+  const accountCeiling = variant === "account-ceiling";
   const canUseEditor = !compact || showDetails;
   const missing = loading ? "กำลังตรวจสิทธิ์และเพดาน…" : unset ? "ยังไม่ได้ตั้งเพดานงบ" : "ยังไม่มีเพดานล่าสุดที่ยืนยันได้";
 
@@ -70,7 +71,7 @@ export function BudgetCapEditor({
   function openDraft() {
     if (!canUseEditor || busy.current || !active || blocked || !canEditBudgetCap(known, clientId, Date.now())) return;
     setNotice(null);
-    setDraft({ amount: variant === "campaign-form" && cap ? formatBudgetBaht(cap.clientDailyCapMinor).slice(1) : "", review: null });
+    setDraft({ amount: compact && cap ? formatBudgetBaht(cap.clientDailyCapMinor).slice(1) : "", review: null });
     onEditingChange?.(true);
   }
 
@@ -176,8 +177,8 @@ export function BudgetCapEditor({
   );
 
   if (!compact) return editor;
-  return <section className={automationDisclosureFrame} aria-labelledby={headingId}>
-    <AutomationDisclosureRow title="Daily Ceiling" titleId={headingId} layout="compact-ceiling-row" status={<>
+  return <section className={accountCeiling ? "min-w-0 rounded-md border border-amber-300/80 bg-amber-50 px-2 text-amber-950 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-100" : automationDisclosureFrame} aria-labelledby={headingId}>
+    <AutomationDisclosureRow title="Daily Ceiling" titleId={headingId} layout="compact-ceiling-row" compactCeiling={accountCeiling} status={<>
       <span title={cap ? undefined : missing}>{cap ? formatBudgetBaht(cap.clientDailyCapMinor) : loading ? "กำลังอ่าน…" : unset ? "ยังไม่ตั้ง" : "—"}</span>
       {draft && !showDetails && <span> · มีแบบร่าง</span>}
     </>} expanded={showDetails} controlsId={detailsId} disabled={submitting} onToggle={() => setShowDetails((open) => !open)} />

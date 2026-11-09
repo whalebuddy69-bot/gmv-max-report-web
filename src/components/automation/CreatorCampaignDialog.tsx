@@ -8,6 +8,7 @@ import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { bangkokDay, isFreshAutomationClient } from "@/lib/automation";
 import { formatBudgetBaht, parseBudgetBaht } from "@/lib/automationBudget";
 import { formatValue } from "@/lib/format";
@@ -73,9 +74,9 @@ function CampaignToggle({ row, action, onLifecycle }: {
   return <button type="button" role="switch" aria-label={`${enabled ? "ปิด" : "เปิดอีกครั้ง"} ${row.campaignName}`} aria-checked={enabled} disabled={!action}
     title={!action ? "ยังสลับสถานะรายการนี้จากเว็บไม่ได้" : "เปิดหน้าตรวจและยืนยัน"}
     onClick={(event) => { if (action) onLifecycle(row, action, event.currentTarget); }}
-    className="inline-flex h-11 items-center rounded-md px-1.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-45">
-    <span aria-hidden className={cn("relative block h-5 w-9 rounded-full", enabled ? "bg-primary" : "bg-muted-foreground/45")}>
-      <span className={cn("absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow-sm", enabled && "translate-x-4")} />
+    className="inline-flex h-8 shrink-0 items-center rounded-md px-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-45">
+    <span aria-hidden className={cn("relative block h-3.5 w-6 rounded-full", enabled ? "bg-primary" : "bg-muted-foreground/45")}>
+      <span className={cn("absolute left-0.5 top-0.5 size-2.5 rounded-full bg-white shadow-sm", enabled && "translate-x-2.5")} />
     </span>
   </button>;
 }
@@ -86,18 +87,28 @@ export function CreatorCampaignBreakdownRows({ layout, rows, clientId, now, moni
   onEdit: (row: Row, source: HTMLButtonElement) => void; onLifecycle: (row: Row, action: "PAUSE" | "RESUME", source: HTMLButtonElement) => void;
 }) {
   const hasEnabled = rows.some((row) => row.operationStatus === "ENABLE");
-  return <CreatorCampaignAlignedRows layout={layout} rows={visibleCampaignBreakdown(rows, now)} now={now} renderIdentity={(row) => <>
-    <div className="flex min-w-0 items-center gap-0.5">
+  return <CreatorCampaignAlignedRows layout={layout} rows={visibleCampaignBreakdown(rows, now)} now={now} renderIdentity={(row) => (
+    <div data-campaign-identity className="flex min-w-0 items-center gap-0.5 whitespace-nowrap sm:gap-1">
       {!monitoringOnly && <CampaignToggle row={row} action={allowedLifecycleIntent(row, clientId, hasEnabled, now)} onLifecycle={onLifecycle} />}
       <span className="min-w-0 truncate text-[11px] font-semibold leading-tight" title={row.campaignName}>{row.campaignName}</span>
-    </div>
-    <div className="flex min-w-0 items-center gap-0.5 pl-1">
-      <span className="min-w-0 flex-1 truncate font-mono text-[9px] font-normal text-muted-foreground" title={`Campaign ID: ${row.campaignId}`}>{row.campaignId}</span>
-      {!monitoringOnly && <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0" aria-label={`แก้ไข ${row.campaignName}`} onClick={(event) => onEdit(row, event.currentTarget)}>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="ghost" size="sm" className="h-8 max-w-[8ch] shrink-0 px-1 font-mono text-[9px] text-muted-foreground underline decoration-dotted underline-offset-2 lg:max-w-[19ch]"
+            aria-label={`ดู Campaign ID ${row.campaignId} ของ ${row.campaignName}`} title={`Campaign ID: ${row.campaignId}`}>
+            <span aria-hidden className="lg:hidden">{row.campaignId.length > 7 ? `…${row.campaignId.slice(-5)}` : row.campaignId}</span>
+            <span aria-hidden className="hidden min-w-0 truncate lg:block">{row.campaignId}</span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent aria-label="รายละเอียดแคมเปญ" className="max-w-[calc(100vw-1rem)] space-y-1 px-2.5 py-2 text-xs">
+          <p className="break-words font-semibold">{row.campaignName}</p>
+          <p className="text-muted-foreground">Campaign ID <span className="select-all break-all font-mono text-foreground">{row.campaignId}</span></p>
+        </PopoverContent>
+      </Popover>
+      {!monitoringOnly && <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 text-primary" aria-label={`แก้ไข ${row.campaignName}`} title="แก้ไขแคมเปญ" onClick={(event) => onEdit(row, event.currentTarget)}>
         <Pencil className="size-3.5" aria-hidden />
       </Button>}
     </div>
-  </>} />;
+  )} />;
 }
 
 function OptionalAccountAuto({ client, userId }: { client: AutomationClient; userId: number }) {
@@ -234,18 +245,20 @@ export function CreatorAccountCampaigns({ layout, client, userId, now, onSync, o
 
   return <>
     <CreatorOverviewExpansionRow layout={layout} anchor>
-      <section aria-label={`แคมเปญของ ${accountName}`} className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0 self-center">
-          <h3 className="text-sm font-semibold">แคมเปญวันนี้ <span className="font-normal text-muted-foreground">· {date}</span></h3>
-          <p className="text-[11px] text-muted-foreground">{visible.length} รายการ · รวมรายการเปิดอยู่และรายการที่มี Cost</p>
+      <section aria-label={`แคมเปญของ ${accountName}`} className="flex min-w-0 flex-wrap items-start justify-between gap-x-2 gap-y-1">
+        <div className="flex min-h-8 min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0">
+          <h3 className="whitespace-nowrap text-xs font-semibold">แคมเปญวันนี้</h3>
+          <span className="whitespace-nowrap text-[11px] text-muted-foreground" title="รวมรายการเปิดอยู่และรายการที่มี Cost">{visible.length} รายการ</span>
+          <time dateTime={date} className="hidden whitespace-nowrap text-[10px] text-muted-foreground sm:inline">· {date}</time>
         </div>
-        <div className="flex w-full min-w-0 flex-wrap items-start gap-2 sm:w-auto">
-          <div className="flex items-center gap-1">
-            {!monitoringOnly && <Button type="button" size="sm" variant="outline" className="min-h-11 px-2.5" onClick={(event) => open({ type: "create" }, event.currentTarget)}><Plus className="size-4" aria-hidden /> แบบร่างแคมเปญ</Button>}
-            <Button type="button" variant="ghost" size="sm" className="min-h-11 px-2" aria-label="อัปเดตรายการแคมเปญ"
-              disabled={report.isFetching} onClick={refresh}><RefreshCw className={cn("size-4", report.isFetching && "animate-spin")} aria-hidden /></Button>
+        <div className="flex min-w-0 max-w-full flex-wrap items-start gap-1.5">
+          <div className="flex shrink-0 items-center gap-0.5">
+            {!monitoringOnly && <Button type="button" size="sm" variant="outline" className="h-8 gap-1 px-2" title="แบบร่างแคมเปญ"
+              onClick={(event) => open({ type: "create" }, event.currentTarget)}><Plus className="size-3.5" aria-hidden /> <span className="sr-only sm:not-sr-only">แบบร่างแคมเปญ</span></Button>}
+            <Button type="button" variant="ghost" size="icon" className="size-8" aria-label="อัปเดตรายการแคมเปญ" title="อัปเดตรายการแคมเปญ"
+              disabled={report.isFetching} onClick={refresh}><RefreshCw className={cn("size-3.5", report.isFetching && "animate-spin")} aria-hidden /></Button>
           </div>
-          {!monitoringOnly && isBudgetCapClientId(client.clientId) && <div className="min-w-44 max-w-full flex-1 sm:min-w-56 sm:flex-none">
+          {!monitoringOnly && isBudgetCapClientId(client.clientId) && <div className="w-40 min-w-0 max-w-full sm:w-44 has-[button[aria-expanded=true]]:w-64 sm:has-[button[aria-expanded=true]]:w-64">
             <CreatorAccountCeiling clientId={client.clientId} userId={userId} displayName={accountName} />
           </div>}
         </div>
@@ -257,8 +270,8 @@ export function CreatorAccountCampaigns({ layout, client, userId, now, onSync, o
       {report.isFetching ? "กำลังอ่านแคมเปญ…" : coverage === "complete" ? "ไม่พบแคมเปญเปิดอยู่หรือมี Cost วันนี้" : "ยังอ่านรายการแคมเปญของวันนี้ไม่ครบ"}
     </p></CreatorOverviewExpansionRow>}
     <CreatorOverviewExpansionRow layout={layout}>
-      <div className="space-y-2">
-        <p className="text-[11px] text-muted-foreground">
+      <div className="space-y-1">
+        <p className="text-[10px] leading-snug text-muted-foreground">
           {coverage === "complete" ? "รายงานรายแคมเปญ · เวลาไทย · ตัวเลขอาจมาช้า" : "ข้อมูลรายแคมเปญอาจยังไม่ครบ"}
           {monitoringOnly ? " · ติดตามเท่านั้น" : client.clientId !== PILOT_BUDGET_CLIENT_ID ? " · สวิตช์เปิด–ปิดแคมเปญยังใช้ไม่ได้ในบัญชีนี้" : enabled.length ? " · หากจะเปิดรายการเดิม ต้องปิดแคมเปญที่เปิดอยู่ก่อน" : ""}
           {visible.some((row) => row.viewerBoostBudgetMinor == null) && <> · Viewer Boost ที่เป็น — ยังไม่มีข้อมูลยืนยัน <a className="underline underline-offset-2" href={viewerBoostHelp} target="_blank" rel="noopener noreferrer">ดูวิธีตั้งใน TikTok</a></>}

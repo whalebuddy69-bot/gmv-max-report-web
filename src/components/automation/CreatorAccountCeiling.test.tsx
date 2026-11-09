@@ -23,6 +23,8 @@ it("shows scoped Daily Ceiling without a campaign, and never mounts edit control
   </QueryClientProvider>);
   const extra = render(SRIHIW_CAP_CLIENT_ID);
   expect(extra).toContain('data-layout="compact-ceiling-row"');
+  expect(extra).toContain("bg-amber-50");
+  expect(extra).toContain("min-h-8");
   expect(extra).toContain("฿5,000.00");
   expect(extra).not.toContain("฿9,000.00");
   expect(extra).not.toContain("แก้เพดานงบ");

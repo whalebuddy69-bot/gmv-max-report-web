@@ -207,7 +207,7 @@ export function CreatorOverviewExpansionRow({ layout, anchor = false, children }
 }) {
   return <tr data-overview-row="campaign-toolbar">
     <td colSpan={layout.totalColumns} className="border-b bg-muted/35 p-0">
-      <div id={anchor ? layout.panelId : undefined} className="sticky left-0 min-w-0 max-w-full px-2.5 py-2 [width:100cqi] sm:px-3">
+      <div id={anchor ? layout.panelId : undefined} className="sticky left-0 min-w-0 max-w-full px-2 py-1 [width:100cqi] sm:px-2.5">
         {children}
       </div>
     </td>
@@ -286,8 +286,10 @@ export function CreatorOverviewTableView({ rows, hidden, sort, expanded, onToggl
   const groupStarts = new Set(visibleGroups.flatMap(({ columns }) => columns[0] ? [columns[0].id] : []));
   const header = (sortKey: SortKey, label: string, description?: string): ReactNode => <SortButton label={label} description={description} sortKey={sortKey} sort={sort} onSort={onSort} />;
   const hasGroups = visibleColumns.length > 0;
+  const hasExpanded = rows.some(({ clientId }) => expanded.has(clientId));
   return <div role="region" aria-label="ตาราง Creator และผลโฆษณา" tabIndex={0}
-    className="scrollbar-thin relative w-full min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-lg border [container-type:inline-size] [--overview-account-width:7.125rem] [--overview-status-width:3.625rem] [--overview-metric-width:6.125rem] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:[--overview-account-width:8.75rem] sm:[--overview-status-width:4.25rem] sm:[--overview-metric-width:7rem]">
+    className={cn("scrollbar-thin relative w-full min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-lg border [container-type:inline-size] [--overview-status-width:3.625rem] [--overview-metric-width:6.125rem] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:[--overview-status-width:4.25rem] sm:[--overview-metric-width:7rem]",
+      hasExpanded ? "[--overview-account-width:10.625rem] sm:[--overview-account-width:12rem] lg:[--overview-account-width:15.5rem]" : "[--overview-account-width:7.125rem] sm:[--overview-account-width:8.75rem]")}>
     <table className="table-fixed border-separate border-spacing-0 text-left text-[11px] leading-snug sm:text-xs"
       style={{ width: `max(100%, calc(var(--overview-account-width) + var(--overview-status-width) + ${visibleColumns.length} * var(--overview-metric-width)))` }}>
       <caption className="sr-only">ภาพรวมการตั้งค่าและผลโฆษณาแยกตาม Creator</caption>

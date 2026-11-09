@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Plus, RefreshCw, Search, Store } from "lucide-react";
+import { Check, ChevronDown, CircleHelp, RefreshCw, Search, Store, TriangleAlert, UserRound, UserRoundPlus } from "lucide-react";
 import {
   enrollDiscoveredCreator,
   fetchAutomationLiveDiscovery,
@@ -59,23 +59,20 @@ export function liveDiscoveryPollingInterval(snapshot: AutomationLiveDiscovery |
 
 const searchable = (value: string) => value.normalize("NFKC").trim().toLocaleLowerCase("th-TH");
 
-export function filterDiscoveredLiveCampaigns(rows: readonly AutomationDiscoveredLiveCampaign[], search: string) {
+type AccountFilter = "all" | "creator" | "shop";
+const accountFilters: ReadonlyArray<{ value: AccountFilter; label: string }> = [
+  { value: "all", label: "ทั้งหมด" },
+  { value: "creator", label: "Creator" },
+  { value: "shop", label: "Seller" },
+];
+
+export function filterDiscoveredLiveCampaigns(rows: readonly AutomationDiscoveredLiveCampaign[], search: string, kind: AccountFilter = "all") {
   const query = searchable(search);
-  if (!query) return rows;
-  return rows.filter((row) => [
+  if (!query && kind === "all") return rows;
+  return rows.filter((row) => (kind === "all" || row.kind === kind) && (!query || [
     row.tiktokUsername ? `@${row.tiktokUsername}` : "",
     row.advertiserName, row.advertiserId, row.campaignName, row.campaignId, row.shopName ?? "", row.shopId ?? "",
-  ].some((value) => searchable(value).includes(query)));
-}
-
-function groupByAdvertiser(rows: readonly AutomationDiscoveredLiveCampaign[]) {
-  const groups = new Map<string, { id: string; name: string; campaigns: AutomationDiscoveredLiveCampaign[] }>();
-  for (const campaign of rows) {
-    const group = groups.get(campaign.advertiserId);
-    if (group) group.campaigns.push(campaign);
-    else groups.set(campaign.advertiserId, { id: campaign.advertiserId, name: campaign.advertiserName, campaigns: [campaign] });
-  }
-  return [...groups.values()];
+  ].some((value) => searchable(value).includes(query))));
 }
 
 type EnrollableCampaign = AutomationDiscoveredLiveCampaign & { kind: "creator"; tiktokUsername: string };
@@ -85,33 +82,38 @@ function eligibleCreator(row: AutomationDiscoveredLiveCampaign): row is Enrollab
   return row.kind === "creator" && row.tiktokUsername !== null;
 }
 
-function DiscoveryRow({ campaign, onAdd }: {
+function DiscoveryRow({ campaign, tracked, onAdd }: {
   campaign: AutomationDiscoveredLiveCampaign;
+  tracked: boolean;
   onAdd?: (source: HTMLButtonElement) => void;
 }) {
   const secondaryStatus = campaign.secondaryStatus;
   const providerLabel = secondaryStatus ? providerStatusLabels[secondaryStatus] ?? "มีสถานะรองจาก TikTok" : "ไม่มีสถานะการส่งโฆษณาจาก TikTok";
   const compactStatus = secondaryStatus ? compactProviderStatus[secondaryStatus] ?? "มีสถานะรอง" : null;
+  const deliveryWarning = compactStatus !== null && secondaryStatus !== "CAMPAIGN_STATUS_ENABLE";
   const username = campaign.tiktokUsername ? `@${campaign.tiktokUsername}` : null;
-  const shopLabel = campaign.shopName ? `ร้านค้า · ${campaign.shopName}` : "ร้านค้า · ยังไม่ทราบชื่อ";
-  return <li className="min-w-0">
+  const typeLabel = campaign.kind === "creator" ? "ครีเอเตอร์" : campaign.kind === "shop" ? "ร้านค้า" : "ไม่ทราบประเภท";
+  const TypeIcon = campaign.kind === "creator" ? UserRound : campaign.kind === "shop" ? Store : CircleHelp;
+  const accountLabel = campaign.kind === "shop" ? campaign.shopName ?? "ยังไม่ทราบชื่อร้าน" : username ?? "ยังไม่ยืนยัน @username";
+  return <li className="relative min-w-0">
     <details className="group/row">
-      <summary className="grid min-h-11 min-w-0 cursor-pointer list-none grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 px-2.5 py-1 text-left hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:px-3 [&::-webkit-details-marker]:hidden">
-        <span className="col-start-1 row-start-1 flex min-w-0 items-center gap-1.5">
-          {username && <span className={cn("truncate text-xs font-semibold sm:text-sm", campaign.kind === "shop" && "max-w-[55%]")} title={username}>{username}</span>}
-          {campaign.kind === "shop" && <span className={cn("inline-flex min-w-0 items-center gap-1 text-xs", username ? "text-muted-foreground" : "font-semibold")}>
-            <Store className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
-            <span className="truncate" title={shopLabel}>{shopLabel}</span>
-          </span>}
-          {!username && campaign.kind !== "shop" && <span className="truncate text-xs text-muted-foreground">ยังไม่ยืนยัน @username</span>}
-        </span>
-        <span className="col-start-1 row-start-2 truncate text-xs leading-4 text-muted-foreground sm:col-start-2 sm:row-start-1 sm:text-foreground"
-          title={campaign.campaignName}>{campaign.campaignName}</span>
-        <span className="col-start-2 row-span-2 row-start-1 flex items-center gap-1.5 justify-self-end sm:col-start-3 sm:row-span-1">
-          <span className="flex flex-col items-end whitespace-nowrap" title={providerLabel}>
-            <span className="text-[11px] font-medium leading-4">เปิดอยู่</span>
-            {compactStatus && <span className={cn("text-[10px] leading-3", secondaryStatus === "CAMPAIGN_STATUS_ENABLE" ? "text-muted-foreground" : "text-warning")}>{compactStatus}</span>}
+      <summary className={cn("grid min-h-[44px] min-w-0 cursor-pointer list-none grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1.5 py-1 pl-2.5 text-left hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:gap-x-3 sm:pl-3 [&::-webkit-details-marker]:hidden",
+        onAdd || tracked ? "pr-[44px]" : "pr-2.5 sm:pr-3")}>
+        <span className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-1.5 whitespace-nowrap min-[360px]:grid-cols-[auto_minmax(0,2.5fr)_minmax(0,1fr)] sm:grid-cols-[6rem_minmax(0,1.25fr)_minmax(0,1fr)] sm:gap-x-3 lg:grid-cols-[6rem_minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)]">
+          <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground sm:text-xs">
+            <TypeIcon className={cn("size-3.5 shrink-0", campaign.kind !== "unknown" && "text-primary")} aria-hidden="true" />
+            {typeLabel}
           </span>
+          <span className="truncate text-xs font-semibold sm:text-sm" title={accountLabel}>{accountLabel}</span>
+          <span className="hidden truncate text-[11px] text-muted-foreground min-[360px]:block sm:text-xs sm:text-foreground" title={campaign.campaignName}>{campaign.campaignName}</span>
+          <span className="hidden truncate text-xs text-muted-foreground lg:block" title={campaign.advertiserName}>{campaign.advertiserName}</span>
+        </span>
+        <span className="flex items-center gap-1.5 whitespace-nowrap">
+          <span className="text-[11px] font-medium leading-4" title={providerLabel}>
+            เปิดอยู่
+            {compactStatus && <span className={cn("ml-1 hidden text-[10px] font-normal sm:inline", deliveryWarning ? "text-warning" : "text-muted-foreground")}>· {compactStatus}</span>}
+          </span>
+          {deliveryWarning && <><TriangleAlert className="size-3 shrink-0 text-warning sm:hidden" aria-hidden="true" /><span className="sr-only sm:hidden">{providerLabel}</span></>}
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-open/row:rotate-180 motion-reduce:transition-none" aria-hidden="true" />
           <span className="sr-only">ดูรายละเอียดแคมเปญ</span>
         </span>
@@ -120,6 +122,7 @@ function DiscoveryRow({ campaign, onAdd }: {
         <dt className="text-muted-foreground">แคมเปญ</dt><dd className="break-words">{campaign.campaignName}</dd>
         <dt className="text-muted-foreground">Campaign ID</dt><dd className="break-all tabular-nums">{campaign.campaignId}</dd>
         <dt className="text-muted-foreground">บัญชี TikTok</dt><dd className="break-all">{username ?? "ยังไม่ยืนยัน @username"}</dd>
+        <dt className="text-muted-foreground">Ad Account</dt><dd className="break-words">{campaign.advertiserName} · <span className="break-all tabular-nums">{campaign.advertiserId}</span></dd>
         {campaign.kind === "shop" && <>
           <dt className="text-muted-foreground">ร้านค้า</dt><dd className="break-words">{campaign.shopName ?? "ยังไม่ทราบชื่อร้าน"}</dd>
           {campaign.shopId && <><dt className="text-muted-foreground">รหัสร้านค้า</dt><dd className="break-all tabular-nums">Shop ID {campaign.shopId}</dd></>}
@@ -127,12 +130,14 @@ function DiscoveryRow({ campaign, onAdd }: {
         {campaign.kind === "unknown" && <><dt className="text-muted-foreground">ประเภท</dt><dd>ยังไม่ยืนยันประเภท</dd></>}
         <dt className="text-muted-foreground">สถานะ</dt><dd className="break-words" title={secondaryStatus ?? undefined}>เปิดอยู่ · {providerLabel}</dd>
       </dl>
-      {onAdd && <div className="border-t border-border/50 bg-muted/20 px-2.5 pb-2 sm:px-3">
-        <Button type="button" variant="outline" size="sm" className="min-h-11 w-full sm:w-auto" onClick={(event) => onAdd(event.currentTarget)}>
-          <Plus className="size-4" aria-hidden="true" /> เพิ่มในบัญชี Creator
-        </Button>
-      </div>}
     </details>
+    {onAdd && <Button type="button" variant="ghost" size="icon" className="absolute right-0 top-0 size-[44px] rounded-none text-primary hover:text-primary"
+      aria-label={`เพิ่มในบัญชี Creator ${username}`} title={`ติดตาม ${username}`} onClick={(event) => onAdd(event.currentTarget)}>
+      <UserRoundPlus className="size-[18px]" aria-hidden="true" />
+    </Button>}
+    {tracked && <span className="absolute right-0 top-0 grid size-[44px] place-items-center text-muted-foreground" title="Ad Account นี้มีในบัญชี Creator แล้ว">
+      <Check className="size-4" aria-hidden="true" /><span className="sr-only">Ad Account นี้มีในบัญชี Creator แล้ว</span>
+    </span>}
   </li>;
 }
 
@@ -149,11 +154,11 @@ export function LiveCampaignDiscoveryContent({ snapshot, pending, refreshing, er
   const headingId = useId();
   const searchId = useId();
   const [search, setSearch] = useState("");
+  const [accountFilter, setAccountFilter] = useState<AccountFilter>("all");
   const [showAll, setShowAll] = useState(false);
   const rows = snapshot?.campaigns ?? [];
-  const matched = filterDiscoveredLiveCampaigns(rows, search);
+  const matched = filterDiscoveredLiveCampaigns(rows, search, accountFilter);
   const visible = showAll ? matched : matched.slice(0, DEFAULT_VISIBLE_ROWS);
-  const groups = groupByAdvertiser(visible);
   const advertiserCount = new Set(rows.map((row) => row.advertiserId)).size;
   const hasCoverage = snapshot !== undefined && (snapshot.checkedAt !== null || snapshot.accountsTotal > 0);
   const canAddCreators = snapshot?.canAddCreators === true && !refreshing && !error && (snapshot.state === "ready" || snapshot.state === "partial");
@@ -167,7 +172,7 @@ export function LiveCampaignDiscoveryContent({ snapshot, pending, refreshing, er
         <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
           เปิดอยู่คือสถานะสวิตช์ ไม่ได้ยืนยันว่ากำลังไลฟ์หรือส่งโฆษณา · การไลฟ์ไม่เพิ่มสิทธิ์จัดการ
         </p>
-        {canAddCreators && <p className="text-[11px] leading-relaxed text-muted-foreground">ขยายแคมเปญ Creator ที่ยืนยันชื่อแล้วเพื่อเพิ่มเข้าภาพรวมสำหรับติดตาม</p>}
+        {canAddCreators && <p className="flex items-center gap-1 text-[11px] leading-relaxed text-muted-foreground"><UserRoundPlus className="size-3.5 shrink-0 text-primary" aria-hidden="true" /> กดไอคอนท้ายแถว Creator เพื่อเพิ่มเข้าภาพรวมสำหรับติดตาม</p>}
       </div>
       <Button type="button" size="sm" variant="outline" className="min-h-10 shrink-0"
         disabled={pending || refreshing} onClick={onRefresh}>
@@ -191,31 +196,36 @@ export function LiveCampaignDiscoveryContent({ snapshot, pending, refreshing, er
         {rows.length ? "อัปเดตรอบใหม่ไม่สำเร็จ · แสดงรายการจากรอบล่าสุด" : "ยังอ่านรายการ LIVE จาก TikTok ไม่สำเร็จ · ไม่ได้หมายความว่าไม่มีแคมเปญเปิด"}
       </p>}
       {announcement && <p role="status" className="text-xs text-foreground">{announcement}</p>}
-      {rows.length > 0 && <div className="relative max-w-md">
-        <label htmlFor={searchId} className="sr-only">ค้นหารายการ LIVE</label>
-        <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" aria-hidden="true" />
-        <Input id={searchId} type="search" autoComplete="off" value={search} className="h-9 pl-8 text-base placeholder:text-xs sm:text-sm"
-          placeholder="ค้นหา @username, ร้าน, บัญชี หรือแคมเปญ"
-          onChange={(event) => { setSearch(event.target.value); setShowAll(false); }} />
+      {rows.length > 0 && <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+        <div role="group" aria-label="กรองประเภทบัญชี" className="flex min-w-0 rounded-lg border border-input p-0.5">
+          {accountFilters.map(({ value, label }) => <Button key={value} type="button" size="sm" variant={accountFilter === value ? "secondary" : "ghost"}
+            className="min-h-9 px-2.5" aria-pressed={accountFilter === value} onClick={() => { setAccountFilter(value); setShowAll(false); }}>
+            {label}
+          </Button>)}
+        </div>
+        <div className="relative min-w-0 grow basis-40 sm:max-w-md">
+          <label htmlFor={searchId} className="sr-only">ค้นหารายการ LIVE</label>
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          <Input id={searchId} type="search" autoComplete="off" value={search} className="h-9 pl-8 text-base placeholder:text-xs sm:text-sm"
+            placeholder="ค้นหา @username, ร้าน, บัญชี หรือแคมเปญ"
+            onChange={(event) => { setSearch(event.target.value); setShowAll(false); }} />
+        </div>
       </div>}
       {rows.length === 0 && snapshot?.state === "ready" && !error && <p className="text-sm text-muted-foreground">
         ไม่พบแคมเปญ LIVE GMV Max ที่เปิดสวิตช์ในบัญชีที่ตรวจได้
       </p>}
-      {rows.length > 0 && matched.length === 0 && <p className="text-sm text-muted-foreground">ไม่พบรายการที่ตรงกับคำค้น</p>}
+      {rows.length > 0 && matched.length === 0 && <p className="text-sm text-muted-foreground">ไม่พบรายการที่ตรงกับตัวกรอง</p>}
     </div>
-    {groups.length > 0 && <div role="region" aria-label="รายการแคมเปญ LIVE ที่เปิดสวิตช์" className="divide-y divide-border border-t border-border">
-      {groups.map(({ id, name, campaigns }) => <div key={id}>
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 bg-muted/35 px-2.5 py-0.5 sm:px-3">
-          <span className="min-w-0 flex-1 basis-16 truncate text-[11px] font-medium" title={name}>{name}</span>
-          {managedAdvertiserIds.has(id) && <span className="whitespace-nowrap text-[10px] text-muted-foreground">มีในบัญชี Creator แล้ว</span>}
-          <span className="break-all text-[10px] tabular-nums text-muted-foreground">Ad Account {id}</span>
-        </div>
-        <ul aria-label={`แคมเปญของ ${name}`} className="divide-y divide-border/60">
-          {campaigns.map((campaign) => <DiscoveryRow key={campaign.campaignId} campaign={campaign}
-            onAdd={canAddCreators && !managedAdvertiserIds.has(id) && onSelectCreator && eligibleCreator(campaign)
-              ? (source) => onSelectCreator(campaign, source) : undefined} />)}
-        </ul>
-      </div>)}
+    {visible.length > 0 && <div role="region" aria-label="รายการแคมเปญ LIVE ที่เปิดสวิตช์" className="border-t border-border">
+      <ul className="divide-y divide-border/60">
+        {visible.map((campaign) => {
+          const managed = managedAdvertiserIds.has(campaign.advertiserId);
+          return <DiscoveryRow key={`${campaign.advertiserId}:${campaign.campaignId}`} campaign={campaign}
+            tracked={managed && campaign.kind === "creator"}
+            onAdd={canAddCreators && !managed && onSelectCreator && eligibleCreator(campaign)
+              ? (source) => onSelectCreator(campaign, source) : undefined} />;
+        })}
+      </ul>
     </div>}
     {matched.length > DEFAULT_VISIBLE_ROWS && <footer className="border-t border-border px-2.5 py-1 sm:px-3">
       <Button type="button" variant="ghost" size="sm" className="min-h-10" aria-expanded={showAll}
@@ -354,7 +364,7 @@ export function LiveCampaignDiscovery({ userId, managedAdvertiserIds = NO_MANAGE
         enrollment.reset();
         setAnnouncement("");
         addTrigger.current = source;
-        addFallback.current = source.closest("details")?.querySelector("summary") ?? null;
+        addFallback.current = source.closest("li")?.querySelector("summary") ?? null;
         setSelected(row);
       }} />
     <Dialog open={selected !== null} onOpenChange={(open) => { if (!open && !enrollRequest.current) setSelected(null); }}>
