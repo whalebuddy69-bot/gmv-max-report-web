@@ -30,6 +30,7 @@ const snapshot: AutomationLiveDiscovery = {
 const render = (value = snapshot, error = false) => renderToStaticMarkup(
   <LiveCampaignDiscoveryContent snapshot={value} error={error} pending={false} refreshing={value.state === "refreshing"} onRefresh={() => {}} />,
 );
+const summaryRows = (html: string) => html.match(/<tr\b[^>]*data-discovery-summary[^>]*>.*?<\/tr>/g) ?? [];
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -86,32 +87,36 @@ describe("LIVE GMV Max discovery", () => {
     ] };
     const eligible = view(available);
     expect(eligible.match(/เพิ่มในบัญชี Creator/g)).toHaveLength(1);
-    expect(eligible).toMatch(/<\/details><button[^>]+aria-label="เพิ่มในบัญชี Creator @verified.creator"/);
+    expect(summaryRows(eligible).some(row => row.includes('aria-label="เพิ่มในบัญชี Creator @verified.creator"'))).toBe(true);
     const managed = view(available, new Set([ads]));
     expect(managed).toContain("มีในบัญชี Creator แล้ว");
     expect(managed).not.toContain("เพิ่มในบัญชี Creator");
     expect(view(available, new Set(), true)).not.toContain("เพิ่มในบัญชี Creator");
     expect(view({ ...available, state: "unavailable" })).not.toContain("เพิ่มในบัญชี Creator");
     expect(view(snapshot)).not.toContain("เพิ่มในบัญชี Creator");
+    const multi = view({ ...available, campaigns: [...available.campaigns, { ...creator, campaignId: "9000000000105", tiktokUsername: "second.channel" }] });
+    expect(multi).toContain("เลือกช่อง Creator เพื่อติดตามจาก Synthetic advertiser");
+    expect(multi).not.toContain('aria-label="เพิ่มในบัญชี Creator @verified.creator"');
   });
 
-  it("shows independent single-line Creator and Seller summaries without inventing a username or exposing controls", () => {
+  it("shows real table headers and keeps statuses in summary rows without exposing controls or closed campaign details", () => {
     const html = render();
     expect(html).toContain("LIVE GMV Max ที่เปิดสวิตช์");
     expect(html).toContain("อ่านอย่างเดียว");
     expect(html).toContain("ไม่ได้ยืนยันว่ากำลังไลฟ์หรือส่งโฆษณา");
     expect(html).toContain("การไลฟ์ไม่เพิ่มสิทธิ์จัดการ");
-    const summaries = html.match(/<summary\b[^>]*>.*?<\/summary>/g);
+    expect(html).toMatch(/<thead[^>]*>.*บัญชี \/ ร้านค้า.*สถานะ.*แคมเปญ.*<\/thead>/);
+    const summaries = summaryRows(html);
     expect(summaries).toHaveLength(2);
-    expect(summaries?.[0]).toMatch(/lucide-store.*ร้านค้า.*ร้านตัวอย่าง.*Fixture LIVE shop.*Synthetic advertiser.*เปิดอยู่/);
-    expect(summaries?.[1]).toMatch(/lucide-user-round.*ครีเอเตอร์.*@verified.creator.*Fixture LIVE creator.*Synthetic advertiser.*เปิดอยู่/);
-    expect(html).toMatch(new RegExp(`Ad Account</dt><dd[^>]*>Synthetic advertiser · <span[^>]*>${ads}`));
+    expect(summaries[0]).toMatch(/lucide-store.*ร้านค้า.*ร้านตัวอย่าง.*เปิดอยู่.*ไม่ทราบการส่ง/);
+    expect(summaries[1]).toMatch(/lucide-user-round.*ครีเอเตอร์.*Synthetic advertiser.*เปิดอยู่/);
+    expect(summaries[0]).toContain('aria-label="ดู 1 แคมเปญของ ร้านตัวอย่าง"');
+    expect(html).not.toContain("Fixture LIVE shop");
+    expect(html).not.toContain("Fixture LIVE creator");
+    expect(html).not.toContain("@verified.creator");
     expect(html).toContain('aria-label="กรองประเภทบัญชี"');
     expect(html).toMatch(/aria-pressed="true">ทั้งหมด.*aria-pressed="false">Creator.*aria-pressed="false">Seller/);
-    expect(html).toContain("ยังไม่ยืนยัน @username");
-    expect(html).toContain("@verified.creator");
     expect(html).toContain("เปิดอยู่");
-    expect(html).toContain("ดูรายละเอียดแคมเปญ");
     expect(html).not.toContain('role="switch"');
     expect(html).not.toContain("aria-checked");
     expect(html).not.toContain("@Synthetic advertiser");
@@ -121,8 +126,8 @@ describe("LIVE GMV Max discovery", () => {
 
   it("labels an unknown Shop without replacing its name with an advertiser label", () => {
     const html = render({ ...snapshot, campaigns: [{ ...shop, shopName: null }] });
-    expect(html).toMatch(/<summary[^>]*>.*lucide-store.*ร้านค้า.*ยังไม่ทราบชื่อร้าน.*<\/summary>/);
-    expect(html).toContain(`Shop ID ${shopId}`);
+    expect(summaryRows(html)[0]).toMatch(/lucide-store.*ร้านค้า.*ยังไม่ทราบชื่อร้าน/);
+    expect(html).toContain(`data-discovery-group="shop:${shopId}"`);
     expect(html).not.toContain("ร้านค้า · Synthetic advertiser");
   });
 
@@ -143,11 +148,21 @@ describe("LIVE GMV Max discovery", () => {
     expect(filterDiscoveredLiveCampaigns(rows, "unknown.type", "creator")).toEqual([]);
     expect(filterDiscoveredLiveCampaigns(rows, "unknown.type", "shop")).toEqual([]);
     const html = render({ ...snapshot, campaigns: rows });
-    expect(html).toMatch(/<summary[^>]*>.*lucide-circle-help.*ไม่ทราบประเภท.*@unknown.type.*lucide-triangle-alert.*งบแคมเปญหมด.*<\/summary>/);
+    expect(summaryRows(html)[2]).toMatch(/lucide-circle-help.*ไม่ทราบประเภท.*งบแคมเปญหมด.*lucide-triangle-alert.*งบหมด/);
+  });
+
+  it("counts all open campaigns on one verified shop row even across different ad accounts", () => {
+    const campaigns = [shop, { ...shop, advertiserId: "9000000000002", campaignId: "9000000000105", tiktokUsername: "another.channel",
+      secondaryStatus: "CAMPAIGN_STATUS_BUDGET_EXCEED" }, { ...shop, shopId: "9000000001102", campaignId: "9000000000106" }] as const;
+    const html = render({ ...snapshot, campaigns: [...campaigns] });
+    expect(summaryRows(html)).toHaveLength(2);
+    expect(summaryRows(html)[0]).toMatch(/ร้านตัวอย่าง.*2 Ad Accounts.*เปิดอยู่.*เตือน 1.*ไม่ทราบ 1.*ดู 2 แคมเปญ/);
+    expect(summaryRows(html)[1]).toContain('aria-label="ดู 1 แคมเปญของ ร้านตัวอย่าง"');
+    expect(html).not.toContain("@another.channel");
   });
 
   it("uses cached rows during refresh and never reports a partial scan as no live campaigns", () => {
-    expect(render({ ...snapshot, state: "refreshing" })).toContain("Fixture LIVE shop");
+    expect(render({ ...snapshot, state: "refreshing" })).toContain("ร้านตัวอย่าง");
     expect(render({ ...snapshot, state: "refreshing" })).toContain("แสดงข้อมูลจากรอบล่าสุดระหว่างรอ");
     expect(render({ ...snapshot, state: "partial", accountsChecked: 60, campaigns: [] })).not.toContain("ไม่พบแคมเปญ LIVE GMV Max");
     expect(render({ ...snapshot, state: "ready", campaigns: [] }, true)).not.toContain("ไม่พบแคมเปญ LIVE GMV Max");
