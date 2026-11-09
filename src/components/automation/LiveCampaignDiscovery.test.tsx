@@ -65,11 +65,16 @@ describe("LIVE GMV Max discovery", () => {
     expect(html).toContain("LIVE GMV Max ที่เปิดสวิตช์");
     expect(html).toContain("อ่านอย่างเดียว");
     expect(html).toContain("ไม่ได้ยืนยันว่ากำลังไลฟ์หรือส่งโฆษณา");
+    expect(html).toContain("การไลฟ์ไม่เพิ่มสิทธิ์จัดการ");
     expect(html.match(new RegExp(`Ad Account ${ads}`, "g"))).toHaveLength(1);
     expect(html).toContain("lucide-store");
     expect(html).toContain("ร้านค้า · ร้านตัวอย่าง");
     expect(html).toContain("ยังไม่ยืนยัน @username");
     expect(html).toContain("@verified.creator");
+    expect(html).toContain("เปิดอยู่");
+    expect(html).toContain("ดูรายละเอียดแคมเปญ");
+    expect(html).not.toContain('role="switch"');
+    expect(html).not.toContain("aria-checked");
     expect(html).not.toContain("@Synthetic advertiser");
     expect(html).not.toContain("เพิ่มงบอัตโนมัติ");
     expect(html).not.toContain("แก้ไขงบ");
