@@ -78,6 +78,9 @@ const spendTrendRule = "เทียบยอดใช้จาก TikTok ทุ
 const spendTrendStopRule = "พักเมื่อยอดไม่เพิ่มหรืออ่านข้อมูลไม่ได้ · หยุดเมื่อไม่พบแคมเปญเดิม หรือกดหยุดเอง";
 const spendTrendCaveat = "ยอดใช้ที่เพิ่มขึ้นเป็นสัญญาณแทนการยืนยัน LIVE และอาจมาจากข้อมูลที่รายงานล่าช้า";
 const verifiedRoomSpendTrendRule = "ต้องยืนยันว่าเป็นห้อง LIVE เดิม และเห็นยอดใช้จาก TikTok เพิ่มขึ้นระหว่างการอ่านสองรอบก่อนส่งคำสั่ง";
+const verifiedRoomWithRecoveryRule = "ระบบต้องยืนยันห้อง LIVE เดิมและตรวจยอดใช้ 2 รอบก่อนส่งคำสั่ง โดยปกติต้องเห็นยอดใช้เพิ่มขึ้น";
+const exhaustedRecoveryRule = "หากยอดใช้แตะงบเต็มและห้องเดิมยัง LIVE จะเพิ่มได้แม้ยอดนิ่งหลังตรวจยืนยัน 2 รอบ กรณี TikTok ยืนยันว่างบแคมเปญหมดก็ใช้กฎนี้ได้เมื่อยอดใช้ถึง 80% ทั้งสองกรณียังต้องไม่เกินเพดานงบ";
+const legacyRecoveryGuidance = "รอบนี้ยังไม่อนุญาตให้เพิ่มงบเมื่อยอดนิ่ง หากต้องการใช้กฎงบเต็ม ให้หยุด Auto แล้วตรวจและยืนยันเปิดใหม่";
 const verifiedRoomSpendTrendCaveat = "ยอดใช้ที่เพิ่มอาจมาจากรายงานล่าช้า · เวลาที่ระบบอ่านรายงานไม่ใช่เวลาที่ TikTok อัปเดตยอดใช้";
 const waitingForLiveLabel = "เปิดแล้ว · รอ LIVE ใหม่";
 const detectingLiveLabel = "เปิดแล้ว · กำลังตรวจหาห้อง LIVE";
@@ -162,6 +165,7 @@ export function getAutoArmPreview(data: BudgetAutoStatus, campaignId: string | n
   if (data.continuousSession && (!continuous || data.continuousSession.status !== "STOPPED")) return null;
   const preview = currentPreview(data, campaignId, now, 45_000);
   if (!preview || !isNumericId(preview.campaignId)) return null;
+  if (preview.allowExhaustedRecovery === true && preview.autoDetectLive !== true) return null;
   if (preview.waitingForLive === true) return isWaitingArmPreview(data, preview) ? preview : null;
   if (preview.status === LIVE_WAITING_FOR_SPEND) return isRoomWaitingForSpend(data, preview) ? preview : null;
   if (preview.spendMinor === null || (preview.status !== "BELOW_THRESHOLD" && preview.status !== "WOULD_INCREASE")) return null;
@@ -174,7 +178,8 @@ export function buildAutoArmDraft(data: BudgetAutoStatus, preview: NonNullable<B
   const input = { expectedCampaignId: preview.campaignId, expectedBudgetMinor: preview.currentBudgetMinor,
     expectedPolicyRevision: preview.policyRevision };
   if (!isContinuous(data)) return { strategy: "one-shot", input: { ...input, durationMinutes } };
-  const autoDetect = preview.autoDetectLive === true ? { autoDetectLive: true as const } : {};
+  const autoDetect = preview.autoDetectLive === true ? { autoDetectLive: true as const,
+    ...(preview.allowExhaustedRecovery === true ? { allowExhaustedRecovery: true as const } : {}) } : {};
   if (isWaitingArmPreview(data, preview)) return { strategy: "continuous", evidenceMode: VERIFIED_ROOM_SPEND_TREND,
     input: { ...input, ...autoDetect, expectedLiveSessionId: null, evidenceMode: VERIFIED_ROOM_SPEND_TREND } };
   if (usesSpendTrend(data)) return { strategy: "continuous", evidenceMode: "spend-trend", input: { ...input, evidenceMode: "spend-trend" } };
@@ -214,6 +219,8 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
   const spendTrend = usesSpendTrend(data) && !waitingPreview;
   const verifiedRoomSpendTrend = usesVerifiedRoomSpendTrend(data) || waitingPreview;
   const session = continuous ? data.continuousSession : null;
+  const activeSession = session && session.status !== "STOPPED" ? session : null;
+  const recovery = activeSession ? activeSession.allowExhaustedRecovery === true : preview?.allowExhaustedRecovery === true;
   const waiting = data.mode === "live" && sessionIsWaitingForLive(data);
   const detectsWhileWaiting = waiting ? session?.autoDetectLive === true : preview?.autoDetectLive === true;
   const boundWaiting = data.mode === "live" && boundSessionIsWaitingForSpend(data, preview);
@@ -248,7 +255,10 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
       <summary className="w-fit cursor-pointer py-1">หลักเกณฑ์และข้อจำกัดของ Auto ต่อเนื่อง</summary>
       <p className="mt-1">{continuousRule} · {spendTrend ? spendTrendStopRule : continuousStopRule}</p>
       {spendTrend && <p className="mt-1">{spendTrendRule} · {spendTrendCaveat}</p>}
-      {verifiedRoomSpendTrend && <p className="mt-1">{verifiedRoomSpendTrendRule} · {verifiedRoomSpendTrendCaveat}</p>}
+      {verifiedRoomSpendTrend && <p className="mt-1">{recovery ? verifiedRoomWithRecoveryRule : verifiedRoomSpendTrendRule} · {verifiedRoomSpendTrendCaveat}</p>}
+      {verifiedRoomSpendTrend && recovery && <p className="mt-1">{exhaustedRecoveryRule}</p>}
+      {data.mode === "live" && activeSession?.status === "ARMED" && activeSession.autoDetectLive === true && !recovery &&
+        <p className="mt-1">{legacyRecoveryGuidance}</p>}
     </details>}
   </>;
 }
@@ -277,6 +287,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   const [lastAttemptAt, setLastAttemptAt] = useState<number | null>(null);
   const busy = useRef(false);
   const durationId = useId();
+  const recoveryConsentId = useId();
   const needsFreshRead = lastAttemptAt !== null && dataUpdatedAt <= lastAttemptAt;
   const preview = data.clientId === clientId ? getAutoArmPreview(data, campaignId, Date.now()) : null;
   const compact = variant === "campaign-form";
@@ -298,6 +309,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   const spendTrendDraft = draft?.strategy === "continuous" && draft.evidenceMode === "spend-trend";
   const waitingDraft = draft?.strategy === "continuous" && draft.evidenceMode === VERIFIED_ROOM_SPEND_TREND && draft.input.expectedLiveSessionId === null;
   const autoDetectDraft = draft?.strategy === "continuous" && draft.evidenceMode === VERIFIED_ROOM_SPEND_TREND && draft.input.autoDetectLive === true;
+  const recoveryDraft = draft?.strategy === "continuous" && draft.evidenceMode === VERIFIED_ROOM_SPEND_TREND && draft.input.allowExhaustedRecovery === true;
   const draftActualStart = draft?.strategy === "continuous" && draft.evidenceMode !== "spend-trend" ? liveStartTime(draft.liveSessionStartedAt) : null;
   const attestationComplete = spendTrendDraft || (nativeOff && exclusive);
 
@@ -306,6 +318,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
     if (blockAutoStart || !latest || !draft || (draft.strategy === "continuous") !== continuous || latest.campaignId !== draft.input.expectedCampaignId
       || latest.currentBudgetMinor !== draft.input.expectedBudgetMinor || latest.policyRevision !== draft.input.expectedPolicyRevision) return false;
     if (draft.strategy !== "continuous") return true;
+    if ((latest.allowExhaustedRecovery === true) !== recoveryDraft) return false;
     const waiting = isWaitingArmPreview(data, latest);
     if (waiting || waitingDraft) return waiting && waitingDraft && (latest.autoDetectLive === true) === autoDetectDraft;
     if (draft.evidenceMode === "spend-trend") return spendTrend;
@@ -404,9 +417,10 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
       <p className="text-xs text-muted-foreground">ฐานงบ {formatBudgetBaht(draft.input.expectedBudgetMinor)} · {draft.strategy === "continuous" ? continuousRule : "เพิ่มได้สูงสุดหนึ่งครั้งเมื่อเข้าเกณฑ์"} · ใช้เงินจริง</p>
       {draft.strategy === "continuous" && (draft.evidenceMode === "spend-trend"
         ? <p className="text-xs text-muted-foreground">{spendTrendRule} · {spendTrendCaveat} · เริ่มได้แม้ไม่ทราบสถานะ Auto Budget ของ TikTok แต่จะพักหากพบว่ากำลังเปิดอยู่</p>
-        : waitingDraft ? <p className="text-xs text-muted-foreground">{waitingForLiveRule} · {autoDetectDraft ? autoDetectLiveRule : continuousStopRule} · {verifiedRoomSpendTrendCaveat}</p>
+        : waitingDraft ? <p className="text-xs text-muted-foreground">{recoveryDraft ? verifiedRoomWithRecoveryRule : waitingForLiveRule} · {autoDetectDraft ? autoDetectLiveRule : continuousStopRule} · {verifiedRoomSpendTrendCaveat}</p>
         : <p className="text-xs text-muted-foreground">LIVE ID <span className="tabular break-all">{draft.input.expectedLiveSessionId}</span> · {continuousStopRule}
-          {draft.evidenceMode === VERIFIED_ROOM_SPEND_TREND && ` · ${verifiedRoomSpendTrendRule} · ${verifiedRoomSpendTrendCaveat}`}</p>)}
+          {draft.evidenceMode === VERIFIED_ROOM_SPEND_TREND && ` · ${recoveryDraft ? verifiedRoomWithRecoveryRule : verifiedRoomSpendTrendRule} · ${verifiedRoomSpendTrendCaveat}`}</p>)}
+      {recoveryDraft && <p id={recoveryConsentId} className="text-xs font-medium">{exhaustedRecoveryRule}</p>}
       {draftActualStart && <p className="text-xs text-muted-foreground">{draftActualStart}</p>}
       {!matchesDraft() && <p role="status" className="text-xs text-muted-foreground">{draft.strategy === "continuous" && draft.evidenceMode !== "spend-trend" ? "ข้อมูลแคมเปญ ห้อง LIVE งบ เพดาน หรือสิทธิ์เปลี่ยนแล้ว กรุณาเริ่มตรวจใหม่" : "ข้อมูลแคมเปญ งบ เพดาน หรือสิทธิ์เปลี่ยนแล้ว กรุณาเริ่มตรวจใหม่"}</p>}
       {!spendTrendDraft && <>
@@ -414,7 +428,8 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
         <label className="flex items-start gap-2"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-primary" checked={exclusive} disabled={pending !== null || !matchesDraft()} onChange={(event) => setExclusive(event.target.checked)} />ไม่มีคนหรือระบบอื่นแก้งบพร้อมกันในช่วงนี้</label>
       </>}
       <div className="flex flex-wrap gap-2">
-        <Button type="button" className="min-h-10" disabled={!matchesDraft() || !attestationComplete || pending !== null || needsFreshRead} onClick={() => void confirm()}>{pending === "arm" ? "กำลังเปิด Auto…" : autoDetectDraft ? waitingDraft ? "ยืนยันเปิด Auto ให้ตรวจหา LIVE" : "ยืนยันเปิด Auto สำหรับห้องนี้" : waitingDraft ? "ยืนยันเปิด Auto รอ LIVE" : draft.strategy === "continuous" ? "ยืนยันเปิด Auto ต่อเนื่อง ใช้เงินจริง" : "ยืนยันเปิด Auto ใช้เงินจริง"}</Button>
+        <Button type="button" className="min-h-10" aria-describedby={recoveryDraft ? recoveryConsentId : undefined}
+          disabled={!matchesDraft() || !attestationComplete || pending !== null || needsFreshRead} onClick={() => void confirm()}>{pending === "arm" ? "กำลังเปิด Auto…" : autoDetectDraft ? waitingDraft ? "ยืนยันเปิด Auto ให้ตรวจหา LIVE" : "ยืนยันเปิด Auto สำหรับห้องนี้" : waitingDraft ? "ยืนยันเปิด Auto รอ LIVE" : draft.strategy === "continuous" ? "ยืนยันเปิด Auto ต่อเนื่อง ใช้เงินจริง" : "ยืนยันเปิด Auto ใช้เงินจริง"}</Button>
         <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null} onClick={() => setDraft(null)}>ยกเลิก</Button>
       </div>
     </div> : !compact && preview && <form className="space-y-2" onSubmit={review}>

@@ -87,6 +87,7 @@ const autoPreviewSchema = z.object({
   liveSessionStartedAt: instant.optional(),
   waitingForLive: z.boolean().optional(),
   autoDetectLive: z.literal(true).optional(),
+  allowExhaustedRecovery: z.literal(true).optional(),
   currentBudgetMinor: positiveMinor,
   spendMinor: z.number().int().safe().nonnegative().nullable(),
   thresholdMinor: positiveMinor,
@@ -113,6 +114,7 @@ export const budgetAutoStatusSchema = z.object({
     reason: autoStatusCode.nullable().optional(),
     waitingForLive: z.boolean().optional(),
     autoDetectLive: z.literal(true).optional(),
+    allowExhaustedRecovery: z.literal(true).optional(),
   }).nullable().optional(),
   preview: autoPreviewSchema.nullable(),
   blockers: z.array(autoStatusCode).max(24),
@@ -132,6 +134,7 @@ export const budgetAutoStatusSchema = z.object({
     if (!preview) return true;
     const scoped = supportsAutoWaitingForLive(value.clientId) && value.strategy === "continuous";
     const hasRoom = typeof preview.liveSessionId === "string";
+    if (preview.allowExhaustedRecovery === true && preview.autoDetectLive !== true) return false;
     if (preview.liveSessionStartedAt !== undefined && (!scoped || !hasRoom || preview.waitingForLive === true)) return false;
     if (preview.waitingForLive === true) {
       return scoped && preview.liveSessionId === null && preview.status === WAITING_FOR_LIVE &&
@@ -146,7 +149,9 @@ export const budgetAutoStatusSchema = z.object({
     "only a scoped armed session can be waiting for LIVE")
   .refine((value) => value.continuousSession?.autoDetectLive !== true || (supportsAutoWaitingForLive(value.clientId) &&
     (value.evidenceMode === VERIFIED_ROOM_SPEND_TREND || value.continuousSession.status === "STOPPED") && value.strategy === "continuous"),
-    "LIVE detection requires an exact hybrid session");
+    "LIVE detection requires an exact hybrid session")
+  .refine((value) => value.continuousSession?.allowExhaustedRecovery !== true || value.continuousSession.autoDetectLive === true,
+    "exhausted budget recovery requires LIVE detection authorization");
 
 const budgetAutoExactArmInputSchema = z.object({
   expectedCampaignId: tiktokNumericId,
@@ -160,7 +165,8 @@ const budgetAutoBaseArmInputSchema = budgetAutoExactArmInputSchema.extend({
 const budgetAutoVerifiedContinuousArmInputSchema = budgetAutoBaseArmInputSchema.extend({ expectedLiveSessionId: tiktokNumericId });
 const budgetAutoVerifiedRoomSpendTrendArmInputSchema = budgetAutoVerifiedContinuousArmInputSchema.extend({
   evidenceMode: z.literal(VERIFIED_ROOM_SPEND_TREND), expectedLiveSessionId: tiktokNumericId.nullable(), autoDetectLive: z.literal(true).optional(),
-});
+  allowExhaustedRecovery: z.literal(true).optional(),
+}).refine((value) => value.allowExhaustedRecovery !== true || value.autoDetectLive === true, "exhausted budget recovery requires LIVE detection authorization");
 const budgetAutoSpendTrendArmInputSchema = budgetAutoExactArmInputSchema.extend({ evidenceMode: z.literal("spend-trend") });
 const budgetAutoPpanContinuousArmInputSchema = z.union([budgetAutoVerifiedContinuousArmInputSchema, budgetAutoSpendTrendArmInputSchema]);
 const budgetAutoArmInputSchema = budgetAutoBaseArmInputSchema.extend({ durationMinutes: z.number().int().min(10).max(120) });

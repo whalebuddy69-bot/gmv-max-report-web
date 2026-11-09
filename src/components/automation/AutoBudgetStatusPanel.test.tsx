@@ -464,4 +464,42 @@ describe("Ppan continuous Auto", () => {
     await expect(stopBudgetAutoContinuous(clientId, sessionId)).resolves.toEqual({ stopped: true });
     expect(post.mock.calls).toEqual([[`/automation/budget/${clientId}/auto/arm`, request], [`/automation/budget/${clientId}/auto/stop`, { sessionId }]]);
   });
+
+  it.each([null, sampleLiveSessionId] as const)("only adds exhausted-budget recovery to an explicitly flagged LIVE-detection draft (%j)", async expectedLiveSessionId => {
+    const clientId = BUBPA_CAP_CLIENT_ID;
+    const waiting = expectedLiveSessionId === null;
+    const old = { ...continuous, clientId, evidenceMode: VERIFIED_ROOM_SPEND_TREND, preview: { ...continuous.preview,
+      status: waiting ? WAITING_FOR_LIVE : continuous.preview.status, liveSessionId: expectedLiveSessionId,
+      spendMinor: waiting ? null : continuous.preview.spendMinor, waitingForLive: waiting, autoDetectLive: true } } satisfies BudgetAutoStatus;
+    const ready = { ...old, preview: { ...old.preview, allowExhaustedRecovery: true } } satisfies BudgetAutoStatus;
+    expect(budgetAutoStatusSchema.safeParse(ready).success).toBe(true);
+    const withoutDetection = { ...ready, preview: { ...ready.preview, autoDetectLive: undefined } };
+    expect(budgetAutoStatusSchema.safeParse(withoutDetection).success).toBe(false);
+    expect(getAutoArmPreview(withoutDetection, sampleNumericCampaign, now)).toBeNull();
+    expect(getAutoArmPreview(ready, sampleNumericCampaign, now)).toEqual(ready.preview);
+    const input = { expectedCampaignId: sampleNumericCampaign, expectedBudgetMinor: 800_000, expectedPolicyRevision: 2,
+      expectedLiveSessionId, evidenceMode: VERIFIED_ROOM_SPEND_TREND, autoDetectLive: true } as const;
+    expect(buildAutoArmDraft(old, old.preview, 30)?.input).toEqual(input);
+    expect(buildAutoArmDraft(ready, ready.preview, 30)?.input).toEqual({ ...input, allowExhaustedRecovery: true });
+    const text = "หากยอดใช้แตะงบเต็มและห้องเดิมยัง LIVE จะเพิ่มได้แม้ยอดนิ่งหลังตรวจยืนยัน 2 รอบ";
+    const readyHtml = renderToStaticMarkup(<AutoBudgetStatusBody data={ready} campaignId={sampleNumericCampaign} now={now} />);
+    expect(readyHtml).toContain(text);
+    expect(readyHtml).toContain("TikTok ยืนยันว่างบแคมเปญหมดก็ใช้กฎนี้ได้เมื่อยอดใช้ถึง 80%");
+    const existing = { ...ready, canArm: false, canStop: true, continuousSession: { sessionId, startedAt: observedAt,
+      status: "ARMED", waitingForLive: waiting, autoDetectLive: true } } satisfies BudgetAutoStatus;
+    const previousHtml = renderToStaticMarkup(<AutoBudgetStatusBody data={existing} campaignId={sampleNumericCampaign} now={now} />);
+    expect(previousHtml).not.toContain(text);
+    expect(previousHtml).toContain("ให้หยุด Auto แล้วตรวจและยืนยันเปิดใหม่");
+    const active = { ...existing, continuousSession: { ...existing.continuousSession, allowExhaustedRecovery: true } } satisfies BudgetAutoStatus;
+    expect(budgetAutoStatusSchema.safeParse(active).success).toBe(true);
+    expect(budgetAutoStatusSchema.safeParse({ ...active, continuousSession: { ...active.continuousSession, autoDetectLive: undefined } }).success).toBe(false);
+    expect(renderToStaticMarkup(<AutoBudgetStatusBody data={active} campaignId={sampleNumericCampaign} now={now} />)).toContain(text);
+    const post = vi.spyOn(http, "post").mockResolvedValue({ data: { sessionId, startedAt: observedAt } });
+    const oldRequest = { ...input, nativeAutoOff: true, noConcurrentChanges: true } as const;
+    const request = { ...oldRequest, allowExhaustedRecovery: true } as const;
+    await expect(armBudgetAutoContinuous(clientId, { ...request, autoDetectLive: undefined })).rejects.toThrow();
+    await expect(armBudgetAutoContinuous(clientId, oldRequest)).resolves.toEqual({ sessionId, startedAt: observedAt });
+    await expect(armBudgetAutoContinuous(clientId, request)).resolves.toEqual({ sessionId, startedAt: observedAt });
+    expect(post.mock.calls).toEqual([[`/automation/budget/${clientId}/auto/arm`, oldRequest], [`/automation/budget/${clientId}/auto/arm`, request]]);
+  });
 });
