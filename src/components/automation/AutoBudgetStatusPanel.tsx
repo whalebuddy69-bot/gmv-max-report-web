@@ -15,6 +15,7 @@ import { BANGKOK, bangkokDay } from "@/lib/automation";
 import { formatBudgetBaht } from "@/lib/automationBudget";
 
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, dateStyle: "medium", timeStyle: "short" });
+const liveTime = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, calendar: "gregory", dateStyle: "medium", timeStyle: "medium" });
 const blockers = new Map([
   ["NATIVE_AUTO_UNVERIFIED", "ยังยืนยันไม่ได้ว่า Auto Budget ของ TikTok ปิดอยู่"],
   ["NATIVE_AUTO_CONFLICT", "พักการเพิ่มงบ เพราะพบว่า Auto Budget ของ TikTok เปิดอยู่หรือข้อมูลขัดกัน"],
@@ -132,7 +133,7 @@ function boundSessionIsWaitingForSpend(data: BudgetAutoStatus, preview: BudgetAu
 }
 
 function liveStartTime(value: string | undefined) {
-  return value && Number.isFinite(Date.parse(value)) ? `เริ่ม LIVE จริง ${time.format(new Date(value))} (เวลาไทย)` : null;
+  return value && Number.isFinite(Date.parse(value)) ? `เริ่ม LIVE จริง ${liveTime.format(new Date(value))} (เวลาไทย)` : null;
 }
 
 function statusUnavailable(error: unknown): boolean {
