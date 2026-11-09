@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
-import { armBudgetAuto, armBudgetAutoContinuous, armPpanBudgetAutoContinuous, ASHOP_CAP_CLIENT_ID, budgetAutoStatusSchema, fetchBudgetAutoStatus, NNSHOP_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, stopBudgetAuto, stopBudgetAutoContinuous, stopPpanBudgetAutoContinuous, type BudgetAutoStatus } from "@/api/automationBudget";
+import { armBudgetAuto, armBudgetAutoContinuous, armPpanBudgetAutoContinuous, ASHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, budgetAutoStatusSchema, fetchBudgetAutoStatus, MYUSHOP_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, stopBudgetAuto, stopBudgetAutoContinuous, stopPpanBudgetAutoContinuous, VERIFIED_ROOM_SPEND_TREND, type BudgetAutoStatus } from "@/api/automationBudget";
 import { http } from "@/api/client";
 import { AutoBudgetControls, AutoBudgetStatusBody, AutoBudgetStatusPanel, autoFormSwitchState, getAutoArmPreview } from "./AutoBudgetStatusPanel";
 
@@ -113,7 +113,8 @@ describe("read-only Auto budget panel", () => {
     expect(renderToStaticMarkup(<AutoBudgetControls {...props} data={{ ...armed, canStop: true }} />)).toContain("หยุดรอบ Auto");
   });
 
-  it.each([NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID] as const)("routes live commands to %s only and parses exact bodies", async (clientId) => {
+  it("routes the remaining one-shot commands to nnshop5719 only and parses exact bodies", async () => {
+    const clientId = NNSHOP_CAP_CLIENT_ID;
     const scope = { ...status, clientId, canArm: false };
     const input = { expectedCampaignId: sampleNumericCampaign, expectedBudgetMinor: 40_000, expectedPolicyRevision: 2,
       durationMinutes: 30, nativeAutoOff: true, noConcurrentChanges: true } as const;
@@ -175,14 +176,14 @@ describe("Ppan continuous Auto", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("accepts exact Ppan status only and keeps old one-shot payloads valid", () => {
+  it("accepts exact Ppan status and preserves nnshop5719's one-shot payload", () => {
     const session = { sessionId, status: "ARMED", startedAt: observedAt, reason: null } as const;
     expect(budgetAutoStatusSchema.safeParse({ ...continuous, continuousSession: session }).success).toBe(true);
     expect(budgetAutoStatusSchema.safeParse({ ...continuous, clientId: NNSHOP_CAP_CLIENT_ID }).success).toBe(false);
     expect(budgetAutoStatusSchema.safeParse({ ...status, continuousSession: session }).success).toBe(false);
     expect(budgetAutoStatusSchema.safeParse({ ...continuous, continuousSession: { ...session, sessionId: "invalid" } }).success).toBe(false);
     expect(budgetAutoStatusSchema.safeParse({ ...continuous, preview: { ...continuous.preview, liveSessionId: "invalid" } }).success).toBe(false);
-    expect(budgetAutoStatusSchema.safeParse({ ...status, clientId: ASHOP_CAP_CLIENT_ID }).success).toBe(true);
+    expect(budgetAutoStatusSchema.safeParse({ ...status, clientId: NNSHOP_CAP_CLIENT_ID }).success).toBe(true);
   });
 
   it("shows no-duration continuous review only when Ppan is explicitly permitted, with safety copy", () => {
@@ -279,5 +280,53 @@ describe("Ppan continuous Auto", () => {
       expectedPolicyRevision: 2, expectedLiveSessionId: sampleLiveSessionId, nativeAutoOff: true, noConcurrentChanges: true })).rejects.toThrow();
     await expect(stopBudgetAutoContinuous(NNSHOP_CAP_CLIENT_ID, sessionId)).rejects.toThrow();
     expect(post.mock.calls).toEqual([["/automation/budget/srihiw/auto/arm", input], ["/automation/budget/srihiw/auto/stop", { sessionId }]]);
+  });
+
+  it.each([ASHOP_CAP_CLIENT_ID, MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID] as const)("uses verified-room spend-trend Auto only on the exact %s route", async (clientId) => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const ready = { ...continuous, clientId, evidenceMode: VERIFIED_ROOM_SPEND_TREND } satisfies BudgetAutoStatus;
+    const armed = { ...ready, canArm: false, canStop: true,
+      continuousSession: { sessionId, startedAt: observedAt, status: "ARMED" } } satisfies BudgetAutoStatus;
+    const get = vi.spyOn(http, "get").mockResolvedValueOnce({ data: ready }).mockResolvedValueOnce({ data: continuous });
+    const post = vi.spyOn(http, "post").mockResolvedValueOnce({ data: { sessionId, startedAt: observedAt } })
+      .mockResolvedValueOnce({ data: { stopped: true } });
+    const path = `/automation/budget/${clientId}/auto`;
+    await expect(fetchBudgetAutoStatus(clientId)).resolves.toEqual(ready);
+    await expect(fetchBudgetAutoStatus(clientId)).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    expect(get.mock.calls.map(([requestPath]) => requestPath)).toEqual([`${path}/status`, `${path}/status`]);
+    expect(budgetAutoStatusSchema.safeParse(ready).success).toBe(true);
+    expect(budgetAutoStatusSchema.safeParse(armed).success).toBe(true);
+    expect(budgetAutoStatusSchema.safeParse({ ...ready, evidenceMode: undefined }).success).toBe(false);
+    expect(budgetAutoStatusSchema.safeParse({ ...ready, evidenceMode: "verified-room" }).success).toBe(false);
+    expect(budgetAutoStatusSchema.safeParse({ ...spendTrend, clientId }).success).toBe(false);
+    expect(budgetAutoStatusSchema.safeParse({ ...ready, strategy: "one-shot" }).success).toBe(false);
+    expect(budgetAutoStatusSchema.safeParse({ ...ready, grant: { grantId, status: "ARMED", expiresAt } }).success).toBe(false);
+    expect(budgetAutoStatusSchema.safeParse({ ...ready, clientId: PILOT_BUDGET_CLIENT_ID }).success).toBe(false);
+    expect(budgetAutoStatusSchema.safeParse({ ...ready, clientId: SRIHIW_CAP_CLIENT_ID }).success).toBe(false);
+    expect(getAutoArmPreview(ready, sampleNumericCampaign, now)).toEqual(ready.preview);
+    expect(getAutoArmPreview({ ...ready, evidenceMode: undefined }, sampleNumericCampaign, now)).toBeNull();
+    expect(getAutoArmPreview({ ...ready, preview: { ...ready.preview, liveSessionId: null } }, sampleNumericCampaign, now)).toBeNull();
+    expect(getAutoArmPreview({ ...ready, strategy: "one-shot" }, sampleNumericCampaign, now)).toBeNull();
+    expect(getAutoArmPreview({ ...spendTrend, clientId }, sampleNumericCampaign, now)).toBeNull();
+    const props = { clientId, dataUpdatedAt: now, refresh: async () => null } as const;
+    expect(renderToStaticMarkup(<AutoBudgetControls {...props} data={ready} campaignId={sampleNumericCampaign} />)).toContain("ตรวจเงื่อนไขก่อนเปิด Auto ต่อเนื่อง");
+    expect(renderToStaticMarkup(<AutoBudgetControls {...props} data={armed} campaignId={null} />)).toContain("หยุด Auto ต่อเนื่อง");
+    const html = renderToStaticMarkup(<AutoBudgetStatusBody data={ready} campaignId={sampleNumericCampaign} now={now} />);
+    expect(html).toContain("เป็นห้อง LIVE เดิม");
+    expect(html).toContain("ยอดใช้จาก TikTok เพิ่มขึ้นระหว่างการอ่านสองรอบ");
+    expect(html).toContain("ไม่ใช่เวลาที่ TikTok อัปเดตยอดใช้");
+    expect(html).not.toContain("สัญญาณแทนการยืนยัน LIVE");
+    const exact = { expectedCampaignId: sampleNumericCampaign, expectedBudgetMinor: 800_000, expectedPolicyRevision: 2 };
+    const attestations = { nativeAutoOff: true, noConcurrentChanges: true } as const;
+    const verifiedRoom = { ...exact, ...attestations, expectedLiveSessionId: sampleLiveSessionId };
+    const input = { ...verifiedRoom, evidenceMode: VERIFIED_ROOM_SPEND_TREND } as const;
+    await expect(armBudgetAutoContinuous(clientId, { ...exact, evidenceMode: "spend-trend" })).rejects.toThrow();
+    await expect(armBudgetAutoContinuous(clientId, verifiedRoom)).rejects.toThrow();
+    await expect(armBudgetAutoContinuous(PILOT_BUDGET_CLIENT_ID, input)).rejects.toThrow();
+    await expect(armBudgetAutoContinuous(SRIHIW_CAP_CLIENT_ID, input)).rejects.toThrow();
+    await expect(armBudgetAuto(clientId, { ...exact, ...attestations, durationMinutes: 30 })).rejects.toThrow();
+    await expect(armBudgetAutoContinuous(clientId, input)).resolves.toEqual({ sessionId, startedAt: observedAt });
+    await expect(stopBudgetAutoContinuous(clientId, sessionId)).resolves.toEqual({ stopped: true });
+    expect(post.mock.calls).toEqual([[`${path}/arm`, input], [`${path}/stop`, { sessionId }]]);
   });
 });

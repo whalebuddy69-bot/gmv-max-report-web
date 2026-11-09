@@ -59,7 +59,7 @@ describe("creator overview edit scope", () => {
   });
 
   it("routes each supported creator to its own controls; a row selection never passes an arm campaign", () => {
-    for (const clientId of [PILOT_BUDGET_CLIENT_ID, "srihiw", "nnshop5719", "ashopbytheta"]) {
+    for (const clientId of [PILOT_BUDGET_CLIENT_ID, "srihiw", "nnshop5719", "ashopbytheta", "myushop4", "bubpa_shop189"]) {
       const row = { ...client, clientId };
       expect(creatorEditControlScope(row, null, now)).toEqual({
         syncCurrent: false, budgetClientId: clientId, autoClientId: clientId, autoCampaignId: null,

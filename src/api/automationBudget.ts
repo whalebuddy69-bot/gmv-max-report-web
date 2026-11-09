@@ -11,11 +11,17 @@ const commandMode = z.enum(["dry-run", "live"]);
 export const SRIHIW_CAP_CLIENT_ID = "srihiw";
 export const NNSHOP_CAP_CLIENT_ID = "nnshop5719";
 export const ASHOP_CAP_CLIENT_ID = "ashopbytheta";
-const extraBudgetIds = [SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID] as const;
+export const MYUSHOP_CAP_CLIENT_ID = "myushop4";
+export const BUBPA_CAP_CLIENT_ID = "bubpa_shop189";
+export const VERIFIED_ROOM_SPEND_TREND = "verified-room-spend-trend";
+const verifiedRoomSpendTrendIds = [ASHOP_CAP_CLIENT_ID, MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID] as const;
+const extraBudgetIds = [SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ...verifiedRoomSpendTrendIds] as const;
 const budgetIds = [PILOT_BUDGET_CLIENT_ID, ...extraBudgetIds] as const;
+const continuousBudgetIds = [PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, ...verifiedRoomSpendTrendIds] as const;
+const autoEvidenceModeSchema = z.enum(["spend-trend", "verified-room", VERIFIED_ROOM_SPEND_TREND]);
 export type AdditionalBudgetCapClientId = typeof extraBudgetIds[number];
 export type BudgetCapClientId = typeof budgetIds[number];
-export type ContinuousBudgetClientId = typeof PILOT_BUDGET_CLIENT_ID | typeof SRIHIW_CAP_CLIENT_ID;
+export type ContinuousBudgetClientId = typeof continuousBudgetIds[number];
 export function isAdditionalBudgetCapClientId(value: string): value is AdditionalBudgetCapClientId {
   return extraBudgetIds.some((clientId) => clientId === value);
 }
@@ -23,7 +29,15 @@ export function isBudgetCapClientId(value: string): value is BudgetCapClientId {
   return value === PILOT_BUDGET_CLIENT_ID || isAdditionalBudgetCapClientId(value);
 }
 export function isContinuousBudgetClientId(value: string): value is ContinuousBudgetClientId {
-  return value === PILOT_BUDGET_CLIENT_ID || value === SRIHIW_CAP_CLIENT_ID;
+  return continuousBudgetIds.some((clientId) => clientId === value);
+}
+export function requiresVerifiedRoomSpendTrendAuto(clientId: string): boolean {
+  return verifiedRoomSpendTrendIds.some((id) => id === clientId);
+}
+export function supportsContinuousAutoEvidence(clientId: string, evidenceMode: z.infer<typeof autoEvidenceModeSchema> | undefined): boolean {
+  if (requiresVerifiedRoomSpendTrendAuto(clientId)) return evidenceMode === VERIFIED_ROOM_SPEND_TREND;
+  if (clientId === SRIHIW_CAP_CLIENT_ID) return evidenceMode === "spend-trend";
+  return clientId === PILOT_BUDGET_CLIENT_ID && (evidenceMode === undefined || evidenceMode === "verified-room" || evidenceMode === "spend-trend");
 }
 const capSchema = z.object({
   revision: z.number().int().safe().positive(),
@@ -80,7 +94,7 @@ export const budgetAutoStatusSchema = z.object({
   clientId: z.enum(budgetIds),
   mode: z.enum(["disabled", "shadow", "live"]),
   strategy: z.enum(["continuous", "one-shot"]).optional(),
-  evidenceMode: z.literal("spend-trend").optional(),
+  evidenceMode: autoEvidenceModeSchema.optional(),
   overviewState: z.enum(["on", "off", "pending", "blocked"]).nullable().optional(),
   grant: z.object({ grantId: operationId, status: autoStatusCode, expiresAt: instant }).nullable(),
   continuousSession: z.object({
@@ -93,12 +107,14 @@ export const budgetAutoStatusSchema = z.object({
   blockers: z.array(autoStatusCode).max(24),
   canArm: z.boolean().optional(),
   canStop: z.boolean().optional(),
-}).refine((value) => value.strategy !== "continuous" || (isContinuousBudgetClientId(value.clientId)
-  && (value.clientId === PILOT_BUDGET_CLIENT_ID || value.evidenceMode === "spend-trend")), "invalid continuous Auto strategy scope")
+}).refine((value) => !requiresVerifiedRoomSpendTrendAuto(value.clientId) || (value.strategy === "continuous" && value.grant === null),
+  "this Creator requires continuous Auto")
+  .refine((value) => value.strategy !== "continuous" || supportsContinuousAutoEvidence(value.clientId, value.evidenceMode),
+  "invalid continuous Auto strategy scope")
   .refine((value) => value.continuousSession == null || (isContinuousBudgetClientId(value.clientId) && value.strategy === "continuous"),
     "invalid continuous Auto session scope")
-  .refine((value) => value.evidenceMode !== "spend-trend" || (isContinuousBudgetClientId(value.clientId) && value.strategy === "continuous"),
-    "spend-trend requires a supported continuous Auto scope");
+  .refine((value) => value.evidenceMode === undefined || (value.strategy === "continuous" && supportsContinuousAutoEvidence(value.clientId, value.evidenceMode)),
+    "evidence mode requires a supported continuous Auto scope");
 
 const budgetAutoExactArmInputSchema = z.object({
   expectedCampaignId: tiktokNumericId,
@@ -110,8 +126,9 @@ const budgetAutoBaseArmInputSchema = budgetAutoExactArmInputSchema.extend({
   noConcurrentChanges: z.literal(true),
 });
 const budgetAutoVerifiedContinuousArmInputSchema = budgetAutoBaseArmInputSchema.extend({ expectedLiveSessionId: tiktokNumericId });
+const budgetAutoVerifiedRoomSpendTrendArmInputSchema = budgetAutoVerifiedContinuousArmInputSchema.extend({ evidenceMode: z.literal(VERIFIED_ROOM_SPEND_TREND) });
 const budgetAutoSpendTrendArmInputSchema = budgetAutoExactArmInputSchema.extend({ evidenceMode: z.literal("spend-trend") });
-const budgetAutoContinuousArmInputSchema = z.union([budgetAutoVerifiedContinuousArmInputSchema, budgetAutoSpendTrendArmInputSchema]);
+const budgetAutoPpanContinuousArmInputSchema = z.union([budgetAutoVerifiedContinuousArmInputSchema, budgetAutoSpendTrendArmInputSchema]);
 const budgetAutoArmInputSchema = budgetAutoBaseArmInputSchema.extend({ durationMinutes: z.number().int().min(10).max(120) });
 const budgetAutoArmResultSchema = z.object({ grantId: operationId, expiresAt: instant });
 const budgetAutoContinuousArmResultSchema = z.object({ sessionId: operationId, startedAt: instant });
@@ -160,8 +177,9 @@ export type BudgetCapResult = z.infer<typeof budgetCapResultSchema>;
 export type BudgetCapStatus = Pick<AutomationBudgetStatus, "clientId" | "cap" | "capEditAllowed">;
 export type BudgetAutoStatus = z.infer<typeof budgetAutoStatusSchema>;
 export type BudgetAutoArmInput = z.infer<typeof budgetAutoArmInputSchema>;
-export type BudgetAutoContinuousArmInput = z.infer<typeof budgetAutoContinuousArmInputSchema>;
+export type BudgetAutoContinuousArmInput = z.infer<typeof budgetAutoPpanContinuousArmInputSchema> | BudgetAutoVerifiedRoomSpendTrendArmInput;
 export type BudgetAutoVerifiedContinuousArmInput = z.infer<typeof budgetAutoVerifiedContinuousArmInputSchema>;
+export type BudgetAutoVerifiedRoomSpendTrendArmInput = z.infer<typeof budgetAutoVerifiedRoomSpendTrendArmInputSchema>;
 export type BudgetAutoSpendTrendArmInput = z.infer<typeof budgetAutoSpendTrendArmInputSchema>;
 export type BudgetPrepareInput = {
   expectedCampaignId: string;
@@ -205,9 +223,10 @@ export function fetchAdditionalBudgetCapStatus(clientId: AdditionalBudgetCapClie
 
 /** The operator has to explicitly confirm the reviewed, account-scoped Auto window. */
 export function armBudgetAuto(clientId: BudgetCapClientId, input: BudgetAutoArmInput) {
-  return request(budgetAutoArmResultSchema, "Automation Auto arm", () =>
-    http.post(`${budgetPath(clientId)}/auto/arm`, budgetAutoArmInputSchema.parse(input)),
-  );
+  return request(budgetAutoArmResultSchema, "Automation Auto arm", () => {
+    if (requiresVerifiedRoomSpendTrendAuto(clientId)) throw new Error("Continuous verified-room spend-trend Auto is required");
+    return http.post(`${budgetPath(clientId)}/auto/arm`, budgetAutoArmInputSchema.parse(input));
+  });
 }
 
 export function stopBudgetAuto(clientId: BudgetCapClientId, grantId: string) {
@@ -216,11 +235,12 @@ export function stopBudgetAuto(clientId: BudgetCapClientId, grantId: string) {
   );
 }
 
-/** Continuous commands only exist on the explicitly enabled Ppan/Srihiw routes. */
+/** Continuous authorization must use the evidence mode permitted for this exact Creator. */
 export function armBudgetAutoContinuous(clientId: BudgetCapClientId, input: BudgetAutoContinuousArmInput) {
   return request(budgetAutoContinuousArmResultSchema, "Continuous Auto arm", () => {
     if (!isContinuousBudgetClientId(clientId)) throw new Error("Invalid continuous Auto scope");
-    const body = clientId === SRIHIW_CAP_CLIENT_ID ? budgetAutoSpendTrendArmInputSchema.parse(input) : budgetAutoContinuousArmInputSchema.parse(input);
+    const body = requiresVerifiedRoomSpendTrendAuto(clientId) ? budgetAutoVerifiedRoomSpendTrendArmInputSchema.parse(input)
+      : clientId === SRIHIW_CAP_CLIENT_ID ? budgetAutoSpendTrendArmInputSchema.parse(input) : budgetAutoPpanContinuousArmInputSchema.parse(input);
     return http.post(`${budgetPath(clientId)}/auto/arm`, body);
   });
 }
