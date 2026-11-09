@@ -59,6 +59,17 @@ describe("Creator overview data", () => {
     }
   });
 
+  it("distinguishes a confirmed waiting session without implying that a LIVE has started", () => {
+    for (const clientId of ["ashopbytheta", "bubpa_shop189"] as const) {
+      const row = { ...client, clientId };
+      const waiting = { ...auto, clientId, evidenceMode: "verified-room-spend-trend",
+        continuousSession: { ...auto.continuousSession!, waitingForLive: true } } as const;
+      expect(buildCreatorOverviewRow(row, { auto: waiting }, now).autoBudget).toBe("waiting-for-live");
+      expect(buildCreatorOverviewRow(row, { auto: { ...waiting, overviewState: "blocked" } }, now).autoBudget).toBe("blocked");
+      expect(buildCreatorOverviewRow({ ...row, monitoringOnly: true }, { auto: waiting }, now).autoBudget).toBeNull();
+    }
+  });
+
   it("weights costs using only matched source pairs, includes zero-count cost, and exposes partial coverage", () => {
     const a = buildCreatorOverviewRow(client, { performance }, now);
     const totals = summarizeCreatorOverview([

@@ -34,6 +34,9 @@ export function isContinuousBudgetClientId(value: string): value is ContinuousBu
 export function requiresVerifiedRoomSpendTrendAuto(clientId: string): boolean {
   return verifiedRoomSpendTrendIds.some((id) => id === clientId);
 }
+export function supportsAutoWaitingForLive(clientId: string): boolean {
+  return clientId === ASHOP_CAP_CLIENT_ID || clientId === BUBPA_CAP_CLIENT_ID;
+}
 export function supportsContinuousAutoEvidence(clientId: string, evidenceMode: z.infer<typeof autoEvidenceModeSchema> | undefined): boolean {
   if (requiresVerifiedRoomSpendTrendAuto(clientId)) return evidenceMode === VERIFIED_ROOM_SPEND_TREND;
   if (clientId === SRIHIW_CAP_CLIENT_ID) return evidenceMode === "spend-trend";
@@ -78,8 +81,9 @@ const autoPreviewSchema = z.object({
   status: autoStatusCode,
   campaignId: id,
   liveSessionId: tiktokNumericId.nullable().optional(),
+  waitingForLive: z.boolean().optional(),
   currentBudgetMinor: positiveMinor,
-  spendMinor: z.number().int().safe().nonnegative(),
+  spendMinor: z.number().int().safe().nonnegative().nullable(),
   thresholdMinor: positiveMinor,
   targetBudgetMinor: positiveMinor.nullable(),
   projectedClientSpendMinor: positiveMinor.nullable(),
@@ -102,6 +106,7 @@ export const budgetAutoStatusSchema = z.object({
     status: z.enum(["ARMED", "SENDING", "BLOCKED", "STOPPED"]),
     startedAt: instant,
     reason: autoStatusCode.nullable().optional(),
+    waitingForLive: z.boolean().optional(),
   }).nullable().optional(),
   preview: autoPreviewSchema.nullable(),
   blockers: z.array(autoStatusCode).max(24),
@@ -114,7 +119,14 @@ export const budgetAutoStatusSchema = z.object({
   .refine((value) => value.continuousSession == null || (isContinuousBudgetClientId(value.clientId) && value.strategy === "continuous"),
     "invalid continuous Auto session scope")
   .refine((value) => value.evidenceMode === undefined || (value.strategy === "continuous" && supportsContinuousAutoEvidence(value.clientId, value.evidenceMode)),
-    "evidence mode requires a supported continuous Auto scope");
+    "evidence mode requires a supported continuous Auto scope")
+  .refine((value) => !value.preview || (value.preview.waitingForLive === true
+    ? supportsAutoWaitingForLive(value.clientId) && value.evidenceMode === VERIFIED_ROOM_SPEND_TREND && value.preview.liveSessionId === null &&
+      value.preview.status === "WAITING_FOR_LIVE" && value.preview.spendMinor === null
+    : value.preview.status !== "WAITING_FOR_LIVE" && value.preview.spendMinor !== null),
+    "a waiting preview must be scoped and have no LIVE room")
+  .refine((value) => value.continuousSession?.waitingForLive !== true || (supportsAutoWaitingForLive(value.clientId) && value.continuousSession.status === "ARMED"),
+    "only a scoped armed session can be waiting for LIVE");
 
 const budgetAutoExactArmInputSchema = z.object({
   expectedCampaignId: tiktokNumericId,
@@ -126,7 +138,9 @@ const budgetAutoBaseArmInputSchema = budgetAutoExactArmInputSchema.extend({
   noConcurrentChanges: z.literal(true),
 });
 const budgetAutoVerifiedContinuousArmInputSchema = budgetAutoBaseArmInputSchema.extend({ expectedLiveSessionId: tiktokNumericId });
-const budgetAutoVerifiedRoomSpendTrendArmInputSchema = budgetAutoVerifiedContinuousArmInputSchema.extend({ evidenceMode: z.literal(VERIFIED_ROOM_SPEND_TREND) });
+const budgetAutoVerifiedRoomSpendTrendArmInputSchema = budgetAutoVerifiedContinuousArmInputSchema.extend({
+  evidenceMode: z.literal(VERIFIED_ROOM_SPEND_TREND), expectedLiveSessionId: tiktokNumericId.nullable(),
+});
 const budgetAutoSpendTrendArmInputSchema = budgetAutoExactArmInputSchema.extend({ evidenceMode: z.literal("spend-trend") });
 const budgetAutoPpanContinuousArmInputSchema = z.union([budgetAutoVerifiedContinuousArmInputSchema, budgetAutoSpendTrendArmInputSchema]);
 const budgetAutoArmInputSchema = budgetAutoBaseArmInputSchema.extend({ durationMinutes: z.number().int().min(10).max(120) });
@@ -241,6 +255,9 @@ export function armBudgetAutoContinuous(clientId: BudgetCapClientId, input: Budg
     if (!isContinuousBudgetClientId(clientId)) throw new Error("Invalid continuous Auto scope");
     const body = requiresVerifiedRoomSpendTrendAuto(clientId) ? budgetAutoVerifiedRoomSpendTrendArmInputSchema.parse(input)
       : clientId === SRIHIW_CAP_CLIENT_ID ? budgetAutoSpendTrendArmInputSchema.parse(input) : budgetAutoPpanContinuousArmInputSchema.parse(input);
+    if ("expectedLiveSessionId" in body && body.expectedLiveSessionId === null && !supportsAutoWaitingForLive(clientId)) {
+      throw new Error("Waiting for LIVE is not supported for this Creator");
+    }
     return http.post(`${budgetPath(clientId)}/auto/arm`, body);
   });
 }

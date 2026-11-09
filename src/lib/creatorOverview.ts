@@ -1,5 +1,5 @@
 import { isMonitoringOnlyCreator, type AutomationClient, type AutomationPerformance } from "@/api/automation";
-import type { BudgetAutoStatus, BudgetCapStatus } from "@/api/automationBudget";
+import { supportsAutoWaitingForLive, VERIFIED_ROOM_SPEND_TREND, type BudgetAutoStatus, type BudgetCapStatus } from "@/api/automationBudget";
 import { creatorRowPerformance, isFreshAutomationClient, totalForReturnedHours } from "@/lib/automation";
 
 export type CreatorOverviewRow = {
@@ -12,7 +12,7 @@ export type CreatorOverviewRow = {
   active: boolean | null;
   campaignName: string | null;
   scheduleTime: { startAt: string; endAt: string | null } | null;
-  autoBudget: "on" | "off" | "pending" | "blocked" | null;
+  autoBudget: "on" | "off" | "pending" | "blocked" | "waiting-for-live" | null;
   totalBudgetMinor: number | null;
   maxBudgetMinor: number | null;
   viewerBoostBudgetMinor: number | null;
@@ -59,6 +59,10 @@ export function buildCreatorOverviewRow(client: AutomationClient, source: {
   const gmvMinor = totalForReturnedHours(series, "gmvMinor");
   const skuOrders = totalForReturnedHours(series, "orders");
   const liveViews = totalForReturnedHours(series, "liveViews");
+  const auto = !monitoringOnly && source.auto?.clientId === client.clientId ? source.auto : undefined;
+  const waitingForLive = auto?.overviewState === "on" && auto.mode === "live" && auto.strategy === "continuous"
+    && auto.evidenceMode === VERIFIED_ROOM_SPEND_TREND && supportsAutoWaitingForLive(client.clientId)
+    && auto.continuousSession?.status === "ARMED" && auto.continuousSession.waitingForLive === true;
   return {
     clientId: client.clientId,
     displayName: client.displayName,
@@ -69,7 +73,7 @@ export function buildCreatorOverviewRow(client: AutomationClient, source: {
     active: fresh ? campaign !== null : null,
     campaignName: campaign?.campaignName ?? null,
     scheduleTime: campaign?.scheduleStartAt ? { startAt: campaign.scheduleStartAt, endAt: campaign.scheduleEndAt ?? null } : null,
-    autoBudget: !monitoringOnly && source.auto?.clientId === client.clientId ? source.auto.overviewState ?? null : null,
+    autoBudget: waitingForLive ? "waiting-for-live" : auto?.overviewState ?? null,
     totalBudgetMinor: campaign?.dailyBudgetMinor ?? null,
     maxBudgetMinor: !monitoringOnly && source.cap?.clientId === client.clientId ? source.cap.cap?.clientDailyCapMinor ?? null : null,
     viewerBoostBudgetMinor: campaign?.viewerBoostBudgetMinor ?? null,

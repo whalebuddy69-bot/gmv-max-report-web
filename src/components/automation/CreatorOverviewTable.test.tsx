@@ -143,7 +143,7 @@ describe("Creator overview table", () => {
   });
 
   it("uses one physical table and the same visible column order for account and campaign", () => {
-    const html = renderToStaticMarkup(<CreatorOverviewTableView rows={[{ ...base, maxBudgetMinor: 55_500, autoBudget: "on", roiActual: 4.2 }]}
+    const html = renderToStaticMarkup(<CreatorOverviewTableView rows={[{ ...base, maxBudgetMinor: 55_500, autoBudget: "waiting-for-live", roiActual: 4.2 }]}
       hidden={new Set(["gmvMinor", "totalBudgetMinor"])} sort={{ key: "displayName", direction: "ascending" }}
       expanded={new Set([base.clientId])} onToggleExpand={() => {}} onSort={() => {}} renderExpanded={(_row, layout) =>
         <CreatorCampaignAlignedRows layout={layout} rows={[campaign]} now={today} renderIdentity={(item) => <span>{item.campaignName}</span>} />} />);
@@ -157,6 +157,7 @@ describe("Creator overview table", () => {
     expect(keys(sub)).not.toContain("gmvMinor");
     expect(keys(sub)).not.toContain("totalBudgetMinor");
     expect(main).toContain("฿555.00");
+    expect(main).toContain("เปิดแล้ว · รอ LIVE");
     expect(main).toContain("4.20×");
     expect(sub).not.toContain("฿555.00");
     expect(sub).toContain("฿20.00");

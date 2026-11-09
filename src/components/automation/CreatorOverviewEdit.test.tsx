@@ -91,6 +91,16 @@ describe("creator overview edit scope", () => {
     expect(findEditableCreatorCampaign(client, selected, now + MAX_OBSERVATION_AGE_MS)).toBeNull();
   });
 
+  it.each(["ashopbytheta", "bubpa_shop189"])("preserves exact Sync proof for an enabled future scheduled campaign on %s", (clientId) => {
+    const scheduleStartAt = new Date(now + 3_600_000).toISOString();
+    const row = { ...client, clientId, campaign: { ...client.campaign!, scheduleStartAt } };
+    const selection = { ...selected, scheduleStartAt };
+    const synced = resolveCreatorEditSnapshot(overview(row), row, selection, now);
+    expect(synced?.proof.campaignId).toBe(selection.campaignId);
+    expect(creatorEditControlScope(row, synced?.proof ?? null, now).autoCampaignId).toBe(selection.campaignId);
+    expect(resolveCreatorEditSnapshot(overview({ ...row, campaign: null }), row, selection, now)).toBeNull();
+  });
+
   it("renders a compact exact edit with current reported ROI and the proper units, without a review ROI button", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const queryClient = new QueryClient();
