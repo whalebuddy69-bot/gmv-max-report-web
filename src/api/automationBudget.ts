@@ -14,10 +14,11 @@ export const ASHOP_CAP_CLIENT_ID = "ashopbytheta";
 export const MYUSHOP_CAP_CLIENT_ID = "myushop4";
 export const BUBPA_CAP_CLIENT_ID = "bubpa_shop189";
 export const VERIFIED_ROOM_SPEND_TREND = "verified-room-spend-trend";
+export const WAITING_FOR_LIVE = "WAITING_FOR_LIVE";
 const verifiedRoomSpendTrendIds = [ASHOP_CAP_CLIENT_ID, MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID] as const;
 const extraBudgetIds = [SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ...verifiedRoomSpendTrendIds] as const;
 const budgetIds = [PILOT_BUDGET_CLIENT_ID, ...extraBudgetIds] as const;
-const continuousBudgetIds = [PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, ...verifiedRoomSpendTrendIds] as const;
+const continuousBudgetIds = [PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ...verifiedRoomSpendTrendIds] as const;
 const autoEvidenceModeSchema = z.enum(["spend-trend", "verified-room", VERIFIED_ROOM_SPEND_TREND]);
 export type AdditionalBudgetCapClientId = typeof extraBudgetIds[number];
 export type BudgetCapClientId = typeof budgetIds[number];
@@ -35,10 +36,11 @@ export function requiresVerifiedRoomSpendTrendAuto(clientId: string): boolean {
   return verifiedRoomSpendTrendIds.some((id) => id === clientId);
 }
 export function supportsAutoWaitingForLive(clientId: string): boolean {
-  return clientId === ASHOP_CAP_CLIENT_ID || clientId === BUBPA_CAP_CLIENT_ID;
+  // Feature eligibility only. The server still checks binding, operator and write readiness.
+  return isContinuousBudgetClientId(clientId);
 }
 export function supportsContinuousAutoEvidence(clientId: string, evidenceMode: z.infer<typeof autoEvidenceModeSchema> | undefined): boolean {
-  if (requiresVerifiedRoomSpendTrendAuto(clientId)) return evidenceMode === VERIFIED_ROOM_SPEND_TREND;
+  if (evidenceMode === VERIFIED_ROOM_SPEND_TREND) return isContinuousBudgetClientId(clientId);
   if (clientId === SRIHIW_CAP_CLIENT_ID) return evidenceMode === "spend-trend";
   return clientId === PILOT_BUDGET_CLIENT_ID && (evidenceMode === undefined || evidenceMode === "verified-room" || evidenceMode === "spend-trend");
 }
@@ -112,7 +114,8 @@ export const budgetAutoStatusSchema = z.object({
   blockers: z.array(autoStatusCode).max(24),
   canArm: z.boolean().optional(),
   canStop: z.boolean().optional(),
-}).refine((value) => !requiresVerifiedRoomSpendTrendAuto(value.clientId) || (value.strategy === "continuous" && value.grant === null),
+}).refine((value) => (!requiresVerifiedRoomSpendTrendAuto(value.clientId) && value.evidenceMode !== VERIFIED_ROOM_SPEND_TREND) ||
+  (value.strategy === "continuous" && value.grant === null),
   "this Creator requires continuous Auto")
   .refine((value) => value.strategy !== "continuous" || supportsContinuousAutoEvidence(value.clientId, value.evidenceMode),
   "invalid continuous Auto strategy scope")
@@ -121,11 +124,12 @@ export const budgetAutoStatusSchema = z.object({
   .refine((value) => value.evidenceMode === undefined || (value.strategy === "continuous" && supportsContinuousAutoEvidence(value.clientId, value.evidenceMode)),
     "evidence mode requires a supported continuous Auto scope")
   .refine((value) => !value.preview || (value.preview.waitingForLive === true
-    ? supportsAutoWaitingForLive(value.clientId) && value.evidenceMode === VERIFIED_ROOM_SPEND_TREND && value.preview.liveSessionId === null &&
-      value.preview.status === "WAITING_FOR_LIVE" && value.preview.spendMinor === null
-    : value.preview.status !== "WAITING_FOR_LIVE" && value.preview.spendMinor !== null),
+    ? supportsAutoWaitingForLive(value.clientId) && value.strategy === "continuous" && value.preview.liveSessionId === null &&
+      value.preview.status === WAITING_FOR_LIVE && value.preview.spendMinor === null
+    : value.preview.status !== WAITING_FOR_LIVE && value.preview.spendMinor !== null),
     "a waiting preview must be scoped and have no LIVE room")
-  .refine((value) => value.continuousSession?.waitingForLive !== true || (supportsAutoWaitingForLive(value.clientId) && value.continuousSession.status === "ARMED"),
+  .refine((value) => value.continuousSession?.waitingForLive !== true || (supportsAutoWaitingForLive(value.clientId) &&
+    value.evidenceMode === VERIFIED_ROOM_SPEND_TREND && value.continuousSession.status === "ARMED"),
     "only a scoped armed session can be waiting for LIVE");
 
 const budgetAutoExactArmInputSchema = z.object({
@@ -253,11 +257,9 @@ export function stopBudgetAuto(clientId: BudgetCapClientId, grantId: string) {
 export function armBudgetAutoContinuous(clientId: BudgetCapClientId, input: BudgetAutoContinuousArmInput) {
   return request(budgetAutoContinuousArmResultSchema, "Continuous Auto arm", () => {
     if (!isContinuousBudgetClientId(clientId)) throw new Error("Invalid continuous Auto scope");
-    const body = requiresVerifiedRoomSpendTrendAuto(clientId) ? budgetAutoVerifiedRoomSpendTrendArmInputSchema.parse(input)
+    const explicitHybrid = "evidenceMode" in input && input.evidenceMode === VERIFIED_ROOM_SPEND_TREND;
+    const body = explicitHybrid || clientId === NNSHOP_CAP_CLIENT_ID || requiresVerifiedRoomSpendTrendAuto(clientId) ? budgetAutoVerifiedRoomSpendTrendArmInputSchema.parse(input)
       : clientId === SRIHIW_CAP_CLIENT_ID ? budgetAutoSpendTrendArmInputSchema.parse(input) : budgetAutoPpanContinuousArmInputSchema.parse(input);
-    if ("expectedLiveSessionId" in body && body.expectedLiveSessionId === null && !supportsAutoWaitingForLive(clientId)) {
-      throw new Error("Waiting for LIVE is not supported for this Creator");
-    }
     return http.post(`${budgetPath(clientId)}/auto/arm`, body);
   });
 }

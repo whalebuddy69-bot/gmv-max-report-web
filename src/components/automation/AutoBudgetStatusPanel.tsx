@@ -3,7 +3,8 @@ import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-quer
 import { Activity } from "lucide-react";
 import { AutomationDisclosureBody, AutomationDisclosureRow, AutomationSwitchTrack, automationDisclosureFrame } from "./AutomationDisclosure";
 import { armBudgetAuto, armBudgetAutoContinuous, fetchBudgetAutoOverviewStatus, fetchBudgetAutoStatus, requiresVerifiedRoomSpendTrendAuto,
-  stopBudgetAuto, stopBudgetAutoContinuous, supportsAutoWaitingForLive, supportsContinuousAutoEvidence, VERIFIED_ROOM_SPEND_TREND,
+  stopBudgetAuto, stopBudgetAutoContinuous, supportsAutoWaitingForLive, supportsContinuousAutoEvidence,
+  VERIFIED_ROOM_SPEND_TREND, WAITING_FOR_LIVE,
   type BudgetAutoArmInput, type BudgetAutoSpendTrendArmInput, type BudgetAutoVerifiedContinuousArmInput, type BudgetAutoVerifiedRoomSpendTrendArmInput, type BudgetAutoStatus,
   type BudgetCapClientId } from "@/api/automationBudget";
 import { ApiError } from "@/api/client";
@@ -30,7 +31,7 @@ const blockers = new Map([
 ]);
 const previews = new Map([
   ["WOULD_INCREASE", "ตามตัวเลขในรายงานเข้าเกณฑ์เพิ่มงบ"],
-  ["WAITING_FOR_LIVE", "พร้อมตั้ง Auto ให้รอ LIVE"],
+  [WAITING_FOR_LIVE, "พร้อมตั้ง Auto ให้รอ LIVE"],
   ["CONTEXT_UNVERIFIED", "ยังยืนยันข้อมูลงบหรือยอดใช้ไม่ครบ"],
   ["POLICY_UNAVAILABLE", "ยังอ่านเพดานงบไม่ได้"],
   ["POLICY_LOCKED", "เพดานถูกล็อกระหว่างตรวจผลรายการเดิม"],
@@ -98,8 +99,8 @@ function usesVerifiedRoomSpendTrend(data: BudgetAutoStatus): boolean {
 }
 
 function isWaitingArmPreview(data: BudgetAutoStatus, preview: NonNullable<BudgetAutoStatus["preview"]>): boolean {
-  return supportsAutoWaitingForLive(data.clientId) && usesVerifiedRoomSpendTrend(data)
-    && preview.waitingForLive === true && preview.liveSessionId === null;
+  return supportsAutoWaitingForLive(data.clientId) && isContinuous(data) && preview.waitingForLive === true
+    && preview.status === WAITING_FOR_LIVE && preview.liveSessionId === null && preview.spendMinor === null;
 }
 
 function sessionIsWaitingForLive(data: BudgetAutoStatus): boolean {
@@ -133,8 +134,8 @@ export function getAutoArmPreview(data: BudgetAutoStatus, campaignId: string | n
   if (data.continuousSession && (!continuous || data.continuousSession.status !== "STOPPED")) return null;
   const preview = currentPreview(data, campaignId, now, 45_000);
   if (!preview || !isNumericId(preview.campaignId)) return null;
-  if (preview.waitingForLive === true) return preview.status === "WAITING_FOR_LIVE" && isWaitingArmPreview(data, preview) ? preview : null;
-  if (preview.status !== "BELOW_THRESHOLD" && preview.status !== "WOULD_INCREASE") return null;
+  if (preview.waitingForLive === true) return isWaitingArmPreview(data, preview) ? preview : null;
+  if (preview.spendMinor === null || (preview.status !== "BELOW_THRESHOLD" && preview.status !== "WOULD_INCREASE")) return null;
   return !continuous || usesSpendTrend(data) || isNumericId(preview.liveSessionId) ? preview : null;
 }
 
@@ -162,8 +163,9 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
   const preview = currentPreview(data, campaignId, now, 180_000);
   const reasons = [...new Set(data.blockers.map((code) => blockers.get(code) ?? "มีเงื่อนไขความปลอดภัยที่ยังไม่ผ่าน"))];
   const continuous = isContinuous(data);
-  const spendTrend = usesSpendTrend(data);
-  const verifiedRoomSpendTrend = usesVerifiedRoomSpendTrend(data);
+  const waitingPreview = preview !== null && isWaitingArmPreview(data, preview);
+  const spendTrend = usesSpendTrend(data) && !waitingPreview;
+  const verifiedRoomSpendTrend = usesVerifiedRoomSpendTrend(data) || waitingPreview;
   const session = continuous ? data.continuousSession : null;
   const waiting = data.mode === "live" && sessionIsWaitingForLive(data);
   const sessionReason = session?.reason ? continuousReasons.get(session.reason) ?? blockers.get(session.reason) ?? previews.get(session.reason) ?? "ระบบยังไม่ยืนยันเงื่อนไขให้เพิ่มงบ" : null;
@@ -173,7 +175,7 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
     {data.grant && <p className="mt-2 text-xs text-muted-foreground">รอบ Auto: {grantLabels.get(data.grant.status) ?? "ดูสถานะจากระบบ"} · สิ้นสุดตามกำหนด {time.format(new Date(data.grant.expiresAt))} (เวลาไทย)</p>}
     {preview ? <div className="mt-3 space-y-2">
       <p className="text-xs font-medium">{previews.get(preview.status) ?? "ยังสรุปผลประเมินไม่ได้"}</p>
-      {isWaitingArmPreview(data, preview) && <p className="text-xs text-muted-foreground">{waitingForLiveRule}</p>}
+      {waitingPreview && <p className="text-xs text-muted-foreground">{waitingForLiveRule}</p>}
       <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 text-xs sm:grid-cols-3">
         <Value label="งบแคมเปญปัจจุบัน" value={preview.currentBudgetMinor} />
         <Value label="ยอดใช้จากรายงาน" value={preview.spendMinor} />
@@ -245,11 +247,14 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
 
   function matchesDraft() {
     const latest = data.clientId === clientId ? getAutoArmPreview(data, campaignId, Date.now()) : null;
-    return !blockAutoStart && !!latest && !!draft && (draft.strategy === "continuous") === continuous && latest.campaignId === draft.input.expectedCampaignId
-      && latest.currentBudgetMinor === draft.input.expectedBudgetMinor && latest.policyRevision === draft.input.expectedPolicyRevision
-      && (draft.strategy !== "continuous" || (draft.evidenceMode === "spend-trend"
-        ? spendTrend : !spendTrend && (draft.evidenceMode === VERIFIED_ROOM_SPEND_TREND) === verifiedRoomSpendTrend
-          && latest.liveSessionId === draft.input.expectedLiveSessionId));
+    if (blockAutoStart || !latest || !draft || (draft.strategy === "continuous") !== continuous || latest.campaignId !== draft.input.expectedCampaignId
+      || latest.currentBudgetMinor !== draft.input.expectedBudgetMinor || latest.policyRevision !== draft.input.expectedPolicyRevision) return false;
+    if (draft.strategy !== "continuous") return true;
+    const waiting = isWaitingArmPreview(data, latest);
+    if (waiting || waitingDraft) return waiting && waitingDraft;
+    if (draft.evidenceMode === "spend-trend") return spendTrend;
+    return !spendTrend && (draft.evidenceMode === VERIFIED_ROOM_SPEND_TREND) === verifiedRoomSpendTrend
+      && latest.liveSessionId === draft.input.expectedLiveSessionId;
   }
 
   function review(event?: FormEvent<HTMLFormElement>) {
@@ -261,10 +266,14 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
     const input = { expectedCampaignId: preview.campaignId, expectedBudgetMinor: preview.currentBudgetMinor,
       expectedPolicyRevision: preview.policyRevision };
     if (continuous) {
-      if (spendTrend) setDraft({ strategy: "continuous", evidenceMode: "spend-trend", input: { ...input, evidenceMode: "spend-trend" } });
-      else if (verifiedRoomSpendTrend && (isNumericId(preview.liveSessionId) || isWaitingArmPreview(data, preview))) {
+      // A scoped pending preview takes precedence over the ordinary immediate strategy.
+      if (isWaitingArmPreview(data, preview)) {
         setDraft({ strategy: "continuous", evidenceMode: VERIFIED_ROOM_SPEND_TREND,
-          input: { ...input, expectedLiveSessionId: preview.liveSessionId ?? null, evidenceMode: VERIFIED_ROOM_SPEND_TREND } });
+          input: { ...input, expectedLiveSessionId: null, evidenceMode: VERIFIED_ROOM_SPEND_TREND } });
+      } else if (spendTrend) setDraft({ strategy: "continuous", evidenceMode: "spend-trend", input: { ...input, evidenceMode: "spend-trend" } });
+      else if (verifiedRoomSpendTrend && isNumericId(preview.liveSessionId)) {
+        setDraft({ strategy: "continuous", evidenceMode: VERIFIED_ROOM_SPEND_TREND,
+          input: { ...input, expectedLiveSessionId: preview.liveSessionId, evidenceMode: VERIFIED_ROOM_SPEND_TREND } });
       } else if (isNumericId(preview.liveSessionId)) setDraft({ strategy: "continuous", evidenceMode: "verified-live",
         input: { ...input, expectedLiveSessionId: preview.liveSessionId } });
     } else setDraft({ strategy: "one-shot", input: { ...input, durationMinutes } });
