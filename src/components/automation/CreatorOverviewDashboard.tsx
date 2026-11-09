@@ -7,6 +7,7 @@ import { ApiError } from "@/api/client";
 import { CreatorHistoricalPerformance } from "@/components/automation/CreatorHistoricalPerformance";
 import { CreatorAccountCampaigns } from "@/components/automation/CreatorCampaignDialog";
 import { CreatorOverviewTable } from "@/components/automation/CreatorOverviewTable";
+import { LiveCampaignDiscovery } from "@/components/automation/LiveCampaignDiscovery";
 import { EmptyState } from "@/components/shared/StateViews";
 import { Button } from "@/components/ui/button";
 import { creatorRowPerformance, isFreshAutomationClient } from "@/lib/automation";
@@ -176,9 +177,10 @@ export function CreatorOverviewDashboard({ data, userId, now, onSync, onRefreshC
       </Button>
     </nav>
     {tab === "overview" ? <>
+      <LiveCampaignDiscovery key={userId} userId={userId} />
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 className="text-base font-semibold">บัญชี Creator</h2>
+          <h2 className="text-base font-semibold">บัญชี Creator ที่ตั้งค่าจัดการ</h2>
           <p className="text-xs text-muted-foreground">เลือกได้หลายบัญชี · กดขยายที่บัญชีเพื่อดูและจัดการรายแคมเปญ</p>
         </div>
         <CreatorFilter clients={data.clients} selection={selection} setSelection={setSelection} />

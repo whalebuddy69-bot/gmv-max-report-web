@@ -42,9 +42,9 @@ export function AutomationPage() {
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-semibold tracking-tight">Automation</h1>
-              <Badge variant="secondary">Creator · LIVE GMV Max</Badge>
+              <Badge variant="secondary">LIVE GMV Max</Badge>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">เลือกหลายบัญชี ตั้งค่าแอด และดู Performance ในหน้าเดียว</p>
+            <p className="mt-1 text-sm text-muted-foreground">ค้นหาแคมเปญ LIVE ที่เปิดสวิตช์ และจัดการบัญชี Creator ที่ตั้งค่าไว้</p>
           </div>
           <Button type="button" variant="outline" className="min-h-10" onClick={() => void overview.refetch()} disabled={overview.isFetching || automationAccessDenied(overview.error)}>
             <RefreshCw className="h-4 w-4" aria-hidden /> อัปเดตสถานะ
