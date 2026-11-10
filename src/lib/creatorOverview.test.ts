@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AutomationClient, AutomationPerformance } from "@/api/automation";
-import type { BudgetAutoStatus, BudgetCapStatus } from "@/api/automationBudget";
+import { KOOLKOOL_CAP_CLIENT_ID, type BudgetAutoStatus, type BudgetCapStatus } from "@/api/automationBudget";
 import { buildCreatorOverviewRow, selectedCreators, summarizeCreatorOverview, toggleCreatorSelection } from "./creatorOverview";
 
 const at = "2026-11-08T05:30:00.000Z";
@@ -60,7 +60,7 @@ describe("Creator overview data", () => {
   });
 
   it("distinguishes a confirmed waiting session without implying that a LIVE has started", () => {
-    for (const clientId of ["ashopbytheta", "bubpa_shop189"] as const) {
+    for (const clientId of ["ashopbytheta", "bubpa_shop189", KOOLKOOL_CAP_CLIENT_ID] as const) {
       const row = { ...client, clientId };
       const waiting = { ...auto, clientId, evidenceMode: "verified-room-spend-trend",
         continuousSession: { ...auto.continuousSession!, waitingForLive: true } } as const;

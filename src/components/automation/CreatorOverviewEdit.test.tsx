@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationOverview } from "@/api/automation";
+import { KOOLKOOL_CAP_CLIENT_ID } from "@/api/automationBudget";
 import { MAX_OBSERVATION_AGE_MS } from "@/lib/automation";
 import { invalidateOtherAutoBudgetViews } from "./AutoBudgetStatusPanel";
 import { CreatorCampaignEditPanel, CreatorCampaignSchedule, CreatorEditBudgetMeter, creatorEditControlScope, findEditableCreatorCampaign, getCreatorEditSync, isCreatorEditSyncCurrent, resolveCreatorEditSnapshot } from "./CreatorOverviewEdit";
@@ -59,7 +60,7 @@ describe("creator overview edit scope", () => {
   });
 
   it("routes each supported creator to its own controls; a row selection never passes an arm campaign", () => {
-    for (const clientId of [PILOT_BUDGET_CLIENT_ID, "srihiw", "nnshop5719", "ashopbytheta", "myushop4", "bubpa_shop189"]) {
+    for (const clientId of [PILOT_BUDGET_CLIENT_ID, "srihiw", "nnshop5719", "ashopbytheta", "myushop4", "bubpa_shop189", KOOLKOOL_CAP_CLIENT_ID]) {
       const row = { ...client, clientId };
       expect(creatorEditControlScope(row, null, now)).toEqual({
         syncCurrent: false, budgetClientId: clientId, autoClientId: clientId, autoCampaignId: null,
@@ -91,7 +92,7 @@ describe("creator overview edit scope", () => {
     expect(findEditableCreatorCampaign(client, selected, now + MAX_OBSERVATION_AGE_MS)).toBeNull();
   });
 
-  it.each(["ashopbytheta", "bubpa_shop189"])("preserves exact Sync proof for an enabled future scheduled campaign on %s", (clientId) => {
+  it.each(["ashopbytheta", "bubpa_shop189", KOOLKOOL_CAP_CLIENT_ID])("preserves exact Sync proof for an enabled future scheduled campaign on %s", (clientId) => {
     const scheduleStartAt = new Date(now + 3_600_000).toISOString();
     const row = { ...client, clientId, campaign: { ...client.campaign!, scheduleStartAt } };
     const selection = { ...selected, scheduleStartAt };
@@ -99,6 +100,14 @@ describe("creator overview edit scope", () => {
     expect(synced?.proof.campaignId).toBe(selection.campaignId);
     expect(creatorEditControlScope(row, synced?.proof ?? null, now).autoCampaignId).toBe(selection.campaignId);
     expect(resolveCreatorEditSnapshot(overview({ ...row, campaign: null }), row, selection, now)).toBeNull();
+  });
+
+  it("does not mount write controls for koolkool888 when the account is still monitoring-only or unbound", () => {
+    const row = { ...client, clientId: KOOLKOOL_CAP_CLIENT_ID };
+    for (const ineligible of [{ ...row, monitoringOnly: true }, { ...row, tiktokAccountId: null }]) {
+      expect(renderToStaticMarkup(<CreatorCampaignEditPanel client={ineligible} campaign={selected} actualRoi={null} userId={1} now={now}
+        onBack={() => {}} onRefreshCampaign={() => {}} onSync={async () => null} />)).toBe("");
+    }
   });
 
   it("renders a compact exact edit with current reported ROI and the proper units, without a review ROI button", () => {
