@@ -69,12 +69,18 @@ export function creatorEditControlScope(client: AutomationClient, sync: CreatorE
   const autoClientId: BudgetCapClientId | null = isBudgetCapClientId(client.clientId) ? client.clientId : null;
   return {
     syncCurrent,
-    budgetClientId: autoClientId === PILOT_BUDGET_CLIENT_ID && client.budgetControlAvailable === false ? null : autoClientId,
-    // The scoped read/Stop path never requires a current campaign or Sync. Arming still does.
+    budgetClientId: autoClientId,
     autoClientId,
-    autoCampaignId: syncCurrent ? client.campaign?.campaignId ?? null : null,
     campaignControl: client.clientId === PILOT_BUDGET_CLIENT_ID,
   };
+}
+
+/** The Auto endpoint independently verifies the exact enabled campaign. A lagging
+ * performance snapshot must not replace that scoped readiness read with a summary. */
+export function creatorEditAutoCampaignId(client: AutomationClient, selected: CreatorEditCampaign, now: number) {
+  return client.access === "verified" && !isMonitoringOnlyCreator(client) && isBudgetCapClientId(client.clientId)
+    && selected.operationStatus === "ENABLE" && notPastScheduleEnd(selected.scheduleEndAt, now)
+    && /^[1-9]\d{5,30}$/.test(selected.campaignId) ? selected.campaignId : null;
 }
 
 /** The list selects a specific row. Never substitute a different active campaign when opening it. */
@@ -183,8 +189,8 @@ export function CreatorCampaignSchedule({ campaign, embedded = false }: {
 function CreatorAutoDiagnostics({ userId }: { userId: number }) {
   const [open, setOpen] = useState(false);
   return <details onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary className="min-h-10 cursor-pointer px-3 py-2.5 text-sm font-medium sm:px-4">ประวัติการทำงานและการแจ้ง LINE</summary>
-    {open && <div className="px-3 pb-2 sm:px-4"><AutoDiagnosticsPanel userId={userId} /></div>}
+    <summary className="min-h-9 cursor-pointer py-2 text-xs font-medium">ประวัติการทำงานและการแจ้ง LINE</summary>
+    {open && <AutoDiagnosticsPanel userId={userId} />}
   </details>;
 }
 
@@ -203,7 +209,8 @@ function CreatorEditAutoSettings({ clientId, userId, campaignId, blockAutoStart 
   clientId: BudgetCapClientId; userId: number; campaignId: string | null; blockAutoStart: boolean;
 }) {
   return <AutoBudgetStatusPanel variant="campaign-form" clientId={clientId} userId={userId}
-    campaignId={campaignId} blockAutoStart={blockAutoStart} />;
+    campaignId={campaignId} blockAutoStart={blockAutoStart}
+    extraDetails={clientId === PILOT_BUDGET_CLIENT_ID ? <CreatorAutoDiagnostics userId={userId} /> : undefined} />;
 }
 
 function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onBack, onRefreshCampaign, onSync }: CreatorEditPanelProps) {
@@ -227,6 +234,12 @@ function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onB
   const activeCampaign = findEditableCreatorCampaign(resolvedClient, campaign, currentTime);
   const exactSync = activeCampaign ? latest?.proof ?? null : null;
   const scope = creatorEditControlScope(resolvedClient, exactSync, currentTime);
+  const autoCampaignId = creatorEditAutoCampaignId(resolvedClient, campaign, currentTime);
+  const manualClientId = maySync ? scope.budgetClientId : null;
+  function renderAuto(blockAutoStart: boolean) {
+    return maySync && scope.autoClientId && <CreatorEditAutoSettings clientId={scope.autoClientId}
+      userId={userId} campaignId={autoCampaignId} blockAutoStart={blockAutoStart} />;
+  }
   const settings = activeCampaign ?? campaign;
   const roiText = actualRoi !== null && Number.isFinite(actualRoi) && actualRoi >= 0 ? `${formatValue(actualRoi, "ratio")}×` : "—";
   const statusText = campaign.operationStatus === "ENABLE" ? maySync ? "เปิด" : "จบแล้ว" : campaign.operationStatus === "DISABLE" ? "ปิด" : "ลบแล้ว";
@@ -254,7 +267,9 @@ function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onB
         </dl>
       </div>
       <p role="status" className="text-xs text-muted-foreground">
-        {!maySync ? "อ่านอย่างเดียว · การเปิดแคมเปญเดิมอยู่ในหน้ารายการ"
+        {!maySync ? campaign.operationStatus === "ENABLE"
+          ? "แคมเปญหมดเวลาแล้ว จึงเปิด Auto ไม่ได้ · ต่อเวลาใน TikTok Ads Manager หรือเลือกแคมเปญที่ยังไม่หมดเวลา"
+          : "อ่านอย่างเดียว · การเปิดแคมเปญเดิมอยู่ในหน้ารายการ"
           : scope.syncCurrent ? "ข้อมูลล่าสุดพร้อมแล้ว"
             : autoSync.isFetching || autoSync.isPending ? "กำลังอ่านข้อมูลล่าสุดจาก TikTok…"
               : "ยังยืนยันแคมเปญล่าสุดไม่ได้ · ระบบจะลองอ่านใหม่อัตโนมัติ"}
@@ -267,14 +282,13 @@ function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onB
           value={settings.targetRoi == null ? null : formatValue(settings.targetRoi, "ratio")}>
         {activeCampaign && <p className="text-xs text-muted-foreground">บัญชีนี้ยังแก้ ROI Target จากเว็บไม่ได้</p>}
       </ReadOnlySetting>}
-      {activeCampaign && scope.budgetClientId ? <ManualBudgetPanel variant="campaign-form"
-        renderBetweenBudgetAndCeiling={(blockAutoStart) => scope.autoClientId && <CreatorEditAutoSettings clientId={scope.autoClientId}
-          userId={userId} campaignId={scope.autoCampaignId} blockAutoStart={blockAutoStart} />}
-        userId={userId} clientId={scope.budgetClientId} active={scope.syncCurrent} clients={[resolvedClient]} onRefreshCampaign={onRefreshCampaign} /> : <ReadOnlySetting label="Daily budget" unit="THB"
+      {manualClientId ? <ManualBudgetPanel variant="campaign-form"
+        renderBetweenBudgetAndCeiling={renderAuto}
+        userId={userId} clientId={manualClientId} active={scope.syncCurrent}
+        clients={[{ ...resolvedClient, campaign: activeCampaign }]} campaignFormFallbackBudgetMinor={settings.dailyBudgetMinor}
+        onRefreshCampaign={onRefreshCampaign} /> : <ReadOnlySetting label="Daily budget" unit="THB"
           value={settings.dailyBudgetMinor == null ? null : formatValue(settings.dailyBudgetMinor / 100, "decimal")} />}
     </div>
-    {activeCampaign && !scope.budgetClientId && scope.autoClientId && <CreatorEditAutoSettings clientId={scope.autoClientId}
-      userId={userId} campaignId={scope.autoCampaignId} blockAutoStart={false} />}
     <div className="divide-y divide-border rounded-lg border border-border bg-card">
       <details>
         <summary className="min-h-10 cursor-pointer px-3 py-2.5 text-sm font-medium sm:px-4">Schedule และชื่อแคมเปญ <span className="text-xs font-normal text-muted-foreground">· เวลาไทย · อ่านอย่างเดียว</span></summary>
@@ -284,7 +298,6 @@ function CreatorCampaignEditBody({ client, campaign, actualRoi, userId, now, onB
         <summary className="min-h-10 cursor-pointer px-3 py-2.5 text-sm font-medium sm:px-4">ดูสัดส่วนงบที่ใช้วันนี้</summary>
         <div className="px-3 pb-2 sm:px-4"><CreatorEditBudgetMeter campaign={activeCampaign} /></div>
       </details>}
-      {activeCampaign && scope.autoClientId === PILOT_BUDGET_CLIENT_ID && <CreatorAutoDiagnostics userId={userId} />}
     </div>
   </div>;
 }

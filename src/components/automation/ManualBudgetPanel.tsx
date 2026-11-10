@@ -108,7 +108,7 @@ export function BudgetOutcome({ operationId, result }: { operationId: string; re
   );
 }
 
-export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active = true, clientId = PILOT_BUDGET_CLIENT_ID, variant, renderBetweenBudgetAndCeiling }: {
+export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active = true, clientId = PILOT_BUDGET_CLIENT_ID, variant, renderBetweenBudgetAndCeiling, campaignFormFallbackBudgetMinor }: {
   userId: number;
   clients: AutomationClient[];
   onRefreshCampaign: () => void;
@@ -116,6 +116,7 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
   clientId?: BudgetCapClientId;
   variant?: "campaign-form";
   renderBetweenBudgetAndCeiling?: (blockAutoStart: boolean) => ReactNode;
+  campaignFormFallbackBudgetMinor?: number | null;
 }) {
   const titleId = useId();
   const inputId = useId();
@@ -304,10 +305,11 @@ export function ManualBudgetPanel({ userId, clients, onRefreshCampaign, active =
     blocked={capEditorBlocked} onEditingChange={editCap} />;
 
   function inlineAmountField(editable = false) {
+    const displayedBudget = currentBudget ?? campaignFormFallbackBudgetMinor ?? null;
     return <>
       <label htmlFor={inputId} className="sr-only">Daily budget (THB)</label>
       <CampaignAmountField id={inputId} autoComplete="off" maxLength={25} placeholder="—"
-        value={editable && inlineDraft ? inlineDraft.amount : currentBudget === null ? "" : money(currentBudget).slice(1)}
+        value={editable && inlineDraft ? inlineDraft.amount : displayedBudget === null ? "" : money(displayedBudget).slice(1)}
         readOnly={!editable || !canDraftAmount || pending !== null || !inlineDraftMatches}
         onChange={editable ? (event) => {
           if (!canDraftAmount || !client || !campaign || !inlineDraftMatches || busy.current || !isFreshAutomationClient(client, Date.now())) return;

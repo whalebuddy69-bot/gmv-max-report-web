@@ -112,6 +112,15 @@ describe("Creator campaign picker", () => {
       .toEqual([active.campaignId, stopped.campaignId]);
   });
 
+  it("shows an expired but still ENABLE campaign as ended and its switch off", () => {
+    const expired = { ...active, scheduleStartAt: "2026-11-08T06:00:00Z", scheduleEndAt: instant };
+    const html = renderToStaticMarkup(<CreatorOverviewTableView rows={[buildCreatorOverviewRow(client, {}, now)]} expanded={new Set([client.clientId])}
+      hidden={new Set()} sort={{ key: "displayName", direction: "ascending" }} onToggleExpand={() => {}} onSort={() => {}}
+      renderExpanded={(_row, layout) => <CreatorCampaignBreakdownRows layout={layout} rows={[expired]} clientId={client.clientId} now={now} onEdit={() => {}} onLifecycle={() => {}} />} />);
+    expect(html).toContain("จบแล้ว");
+    expect(html).toMatch(/role="switch" aria-label="หมดเวลา Active today" aria-checked="false" disabled=""/);
+  });
+
   it("shares the Creator headers and places switch, name, ID and edit together in that order", () => {
     const html = renderToStaticMarkup(<CreatorOverviewTableView rows={[buildCreatorOverviewRow(client, {}, now)]} expanded={new Set([client.clientId])} hidden={new Set()}
       sort={{ key: "displayName", direction: "ascending" }} onToggleExpand={() => {}} onSort={() => {}}

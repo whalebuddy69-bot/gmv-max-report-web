@@ -2,10 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationOverview } from "@/api/automation";
-import { KOOLKOOL_CAP_CLIENT_ID } from "@/api/automationBudget";
+import { KOOLKOOL_CAP_CLIENT_ID, VERIFIED_ROOM_SPEND_TREND } from "@/api/automationBudget";
 import { MAX_OBSERVATION_AGE_MS } from "@/lib/automation";
 import { invalidateOtherAutoBudgetViews } from "./AutoBudgetStatusPanel";
-import { CreatorCampaignEditPanel, CreatorCampaignSchedule, CreatorEditBudgetMeter, creatorEditControlScope, findEditableCreatorCampaign, getCreatorEditSync, isCreatorEditSyncCurrent, resolveCreatorEditSnapshot } from "./CreatorOverviewEdit";
+import { CreatorCampaignEditPanel, CreatorCampaignSchedule, CreatorEditBudgetMeter, creatorEditAutoCampaignId, creatorEditControlScope, findEditableCreatorCampaign, getCreatorEditSync, isCreatorEditSyncCurrent, resolveCreatorEditSnapshot } from "./CreatorOverviewEdit";
 
 const readAt = "2026-11-08T04:00:00.000Z";
 const now = Date.parse(readAt) + 1_000;
@@ -17,7 +17,7 @@ const client: AutomationClient = {
   access: "verified",
   reportingDate: "2026-11-08",
   observedAt: readAt,
-  campaign: { campaignId: "synthetic-campaign", campaignName: "Synthetic Campaign", campaignStatus: "ACTIVE", dailyBudgetMinor: 3_000_00, spendMinor: 2_500_00, targetRoi: 28, currency: "THB" },
+  campaign: { campaignId: "1234567890123456", campaignName: "Synthetic Campaign", campaignStatus: "ACTIVE", dailyBudgetMinor: 3_000_00, spendMinor: 2_500_00, targetRoi: 28, currency: "THB" },
   capMinor: null,
   actions: { start: false, pause: false, increaseBudget: false, decreaseBudget: false, auto: false },
 };
@@ -59,27 +59,30 @@ describe("creator overview edit scope", () => {
     expect(isCreatorEditSyncCurrent(sync, { ...client, observedAt: new Date(afterExpiry).toISOString() }, afterExpiry)).toBe(false);
   });
 
-  it("routes each supported creator to its own controls; a row selection never passes an arm campaign", () => {
+  it("routes each supported creator to its own controls without giving manual writes a stale snapshot", () => {
     for (const clientId of [PILOT_BUDGET_CLIENT_ID, "srihiw", "nnshop5719", "ashopbytheta", "myushop4", "bubpa_shop189", KOOLKOOL_CAP_CLIENT_ID]) {
       const row = { ...client, clientId };
       expect(creatorEditControlScope(row, null, now)).toEqual({
-        syncCurrent: false, budgetClientId: clientId, autoClientId: clientId, autoCampaignId: null,
+        syncCurrent: false, budgetClientId: clientId, autoClientId: clientId,
         campaignControl: clientId === PILOT_BUDGET_CLIENT_ID,
       });
-      expect(creatorEditControlScope(row, getCreatorEditSync(overview(row), row, now), now).autoCampaignId).toBe(client.campaign?.campaignId);
+      expect(creatorEditAutoCampaignId(row, selected, now)).toBe(selected.campaignId);
     }
     const unknown = { ...client, clientId: "other-creator" };
     expect(creatorEditControlScope(unknown, null, now)).toEqual({
-      syncCurrent: false, budgetClientId: null, autoClientId: null, autoCampaignId: null, campaignControl: false,
+      syncCurrent: false, budgetClientId: null, autoClientId: null, campaignControl: false,
     });
   });
 
   it("keeps the scoped Stop/status path reachable without a fresh campaign and allows cap-only sync", () => {
     const noCampaign = { ...client, campaign: null };
     const sync = getCreatorEditSync(overview(noCampaign), noCampaign, now);
-    expect(creatorEditControlScope(noCampaign, sync, now)).toMatchObject({ syncCurrent: true, autoCampaignId: null, autoClientId: client.clientId });
+    expect(creatorEditControlScope(noCampaign, sync, now)).toMatchObject({ syncCurrent: true, autoClientId: client.clientId });
     const offline = { ...noCampaign, access: "unavailable" as const, budgetControlAvailable: false };
-    expect(creatorEditControlScope(offline, sync, now)).toMatchObject({ syncCurrent: false, budgetClientId: null, autoCampaignId: null, autoClientId: client.clientId });
+    expect(creatorEditControlScope(offline, sync, now)).toMatchObject({ syncCurrent: false, autoClientId: client.clientId });
+    expect(creatorEditAutoCampaignId(offline, selected, now)).toBeNull();
+    expect(creatorEditAutoCampaignId(client, { ...selected, operationStatus: "DISABLE" }, now)).toBeNull();
+    expect(creatorEditAutoCampaignId(client, { ...selected, scheduleEndAt: readAt }, now)).toBeNull();
   });
 
   it("allows only the exact active campaign and does not edit ended or expired data", () => {
@@ -98,7 +101,7 @@ describe("creator overview edit scope", () => {
     const selection = { ...selected, scheduleStartAt };
     const synced = resolveCreatorEditSnapshot(overview(row), row, selection, now);
     expect(synced?.proof.campaignId).toBe(selection.campaignId);
-    expect(creatorEditControlScope(row, synced?.proof ?? null, now).autoCampaignId).toBe(selection.campaignId);
+    expect(creatorEditAutoCampaignId(row, selection, now)).toBe(selection.campaignId);
     expect(resolveCreatorEditSnapshot(overview({ ...row, campaign: null }), row, selection, now)).toBeNull();
   });
 
@@ -108,6 +111,32 @@ describe("creator overview edit scope", () => {
       expect(renderToStaticMarkup(<CreatorCampaignEditPanel client={ineligible} campaign={selected} actualRoi={null} userId={1} now={now}
         onBack={() => {}} onRefreshCampaign={() => {}} onSync={async () => null} />)).toBe("");
     }
+  });
+
+  it.each([PILOT_BUDGET_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID])("shows the same Auto switch for %s using exact readiness before overview sync", (clientId) => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const account = { ...client, clientId, campaign: null, budgetControlAvailable: false };
+    const queryClient = new QueryClient();
+    const key = ["automation", "budget-auto-status", 7, clientId, selected.campaignId];
+    const auto = {
+      clientId, strategy: "continuous", mode: "live", evidenceMode: VERIFIED_ROOM_SPEND_TREND,
+      grant: null, continuousSession: null, blockers: [], canArm: true, canStop: false,
+      preview: { status: "WAITING_FOR_LIVE", campaignId: selected.campaignId, liveSessionId: null, waitingForLive: true,
+        autoDetectLive: true, allowExhaustedRecovery: true, keepAutoAcrossRooms: true,
+        currentBudgetMinor: 300_000, spendMinor: null, thresholdMinor: 240_000, targetBudgetMinor: null,
+        projectedClientSpendMinor: null, policyRevision: 7, observedAt: readAt },
+    };
+    const render = () => renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <CreatorCampaignEditPanel client={account} campaign={selected} actualRoi={null} userId={7} now={now}
+        onBack={() => {}} onRefreshCampaign={() => {}} onSync={async () => null} />
+    </QueryClientProvider>);
+    const autoSwitch = () => render().match(/<button[^>]+role="switch"[^>]+aria-label="Auto budget increase"[^>]*>/)?.[0];
+    queryClient.setQueryData(key, auto);
+    expect(autoSwitch()).toBeDefined();
+    expect(autoSwitch()).not.toContain(' disabled=""');
+    queryClient.setQueryData(key, { ...auto, preview: { ...auto.preview, campaignId: "2234567890123456" } });
+    expect(autoSwitch()).toContain(' disabled=""');
+    queryClient.clear();
   });
 
   it("renders a compact exact edit with current reported ROI and the proper units, without a review ROI button", () => {
@@ -152,6 +181,17 @@ describe("creator overview edit scope", () => {
     expect(html).not.toContain("Sync แคมเปญนี้");
     expect(html).not.toContain("Daily Ceiling");
     expect(html).not.toContain("Auto budget increase");
+    queryClient.clear();
+  });
+
+  it("explains why an ENABLE campaign whose schedule has ended cannot be armed again", () => {
+    const queryClient = new QueryClient();
+    const html = renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <CreatorCampaignEditPanel client={client} campaign={{ ...selected, scheduleEndAt: readAt }} actualRoi={null}
+        userId={1} now={now} onBack={() => {}} onRefreshCampaign={() => {}} onSync={async () => null} />
+    </QueryClientProvider>);
+    expect(html).toContain("แคมเปญหมดเวลาแล้ว จึงเปิด Auto ไม่ได้");
+    expect(html).not.toContain('aria-label="Auto budget increase"');
     queryClient.clear();
   });
 

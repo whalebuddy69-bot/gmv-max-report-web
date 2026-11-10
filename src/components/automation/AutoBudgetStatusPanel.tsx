@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { AutomationDisclosureBody, AutomationDisclosureRow, AutomationSwitchTrack, automationDisclosureFrame } from "./AutomationDisclosure";
@@ -29,6 +29,7 @@ const blockers = new Map([
   ["LINE_NOT_READY", "ยังไม่พร้อมส่งแจ้งเตือนทาง LINE สำหรับ Creator นี้"],
   ["WRITE_LOCKED", "มีรายการปรับงบที่ยังต้องตรวจผลก่อนเริ่มรายการใหม่"],
   ["CONTEXT_UNAVAILABLE", "ยังอ่านข้อมูลแคมเปญหรือเพดานไม่ครบ"],
+  ["CAMPAIGN_NOT_VISIBLE", "ไม่พบแคมเปญที่เปิดอยู่และยังไม่หมดเวลา"],
   ["SCHEDULED_CAP_TOO_LOW", "เพดานปัจจุบันไม่พอสำหรับการเพิ่มงบครั้งแรก 20%"],
   ["SCHEDULED_TARGET_NOT_EXACT", "งบปัจจุบันคำนวณยอดเพิ่ม 20% ไม่ลงตัวในหน่วยสตางค์"],
 ]);
@@ -84,7 +85,7 @@ const continuousReasons = new Map([
 ]);
 const continuousRule = "ไม่จำกัดจำนวนครั้ง แต่ไม่เกินเพดานงบ · คำนวณจากงบปัจจุบันใหม่ทุกครั้ง";
 const continuousStopRule = "หยุดเมื่อไม่พบแคมเปญที่เปิด Auto ไว้ หรือ LIVE จบหรือเปลี่ยนห้อง · กดหยุดเองได้";
-const persistentAutoRule = "Auto เปิดค้างเฉพาะแคมเปญนี้ข้ามห้อง LIVE และจะไม่ย้ายไปแคมเปญอื่น ใช้งบล่าสุดที่ TikTok ยืนยันโดยอัตโนมัติ เมื่อเปลี่ยนงบ เพดาน หรือ ROI ที่ยืนยันได้ ระบบจะตรวจข้อมูลใหม่โดยไม่ต้องเปิด Auto ซ้ำ ถ้ายังไม่ถึงเวลาแคมเปญหรือไม่มีห้อง LIVE ระบบจะรอ หากตรวจความปลอดภัยไม่ผ่าน ระบบจะพักการเพิ่มงบโดยยังเปิดอยู่ คุณกดหยุดได้ทุกเมื่อ และระบบจะหยุดหากถูกถอนสิทธิ์";
+const persistentAutoRule = "Auto เปิดค้างเฉพาะแคมเปญนี้ข้ามห้อง LIVE และจะไม่ย้ายไปแคมเปญอื่น ใช้งบล่าสุดที่ TikTok ยืนยันโดยอัตโนมัติ · เพิ่ม 20% แล้วปัดขึ้นเป็นบาทเต็ม เมื่อเปลี่ยนงบ เพดาน หรือ ROI ที่ยืนยันได้ ระบบจะตรวจข้อมูลใหม่โดยไม่ต้องเปิด Auto ซ้ำ ถ้ายังไม่ถึงเวลาแคมเปญหรือไม่มีห้อง LIVE ระบบจะรอ หากตรวจความปลอดภัยไม่ผ่าน ระบบจะพักการเพิ่มงบโดยยังเปิดอยู่ คุณกดหยุดได้ทุกเมื่อ และระบบจะหยุดหากถูกถอนสิทธิ์";
 const legacyRoomGuidance = "รอบเดิมยังใช้เงื่อนไขเดิม หากต้องการเปิดค้างสำหรับแคมเปญเดิม ให้หยุด Auto แล้วเปิดใหม่หนึ่งครั้ง";
 const spendTrendRule = "เทียบยอดใช้จาก TikTok ทุก 1 นาที · เพิ่มได้เมื่อยอดใช้เพิ่มจากรอบก่อนเท่านั้น";
 const spendTrendStopRule = "พักเมื่อยอดไม่เพิ่มหรืออ่านข้อมูลไม่ได้ · หยุดเมื่อไม่พบแคมเปญเดิม หรือกดหยุดเอง";
@@ -531,12 +532,13 @@ export function invalidateOtherAutoBudgetViews(queryClient: QueryClient, userId:
 }
 
 /** Mounted only for the expanded, scoped Creator row; server capabilities govern all controls. */
-export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = "panel", blockAutoStart = false }: {
+export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = "panel", blockAutoStart = false, extraDetails }: {
   clientId: BudgetCapClientId;
   userId: number;
   campaignId: string | null;
   variant?: "panel" | "campaign-form";
   blockAutoStart?: boolean;
+  extraDetails?: ReactNode;
 }) {
   const titleId = useId();
   const detailsId = useId();
@@ -580,8 +582,9 @@ export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = 
           : summarySession?.status === "ARMED"
             ? <>{query.isSuccess && sessionIsWaitingForLive(query.data) && <p>{summarySession.autoDetectLive === true ? autoDetectLiveRule : legacyLiveWaitGuidance}</p>}
               <p>{legacyRoomGuidance}</p></>
-            : <p>เปิด Auto ได้จากหน้าแก้ไขของแคมเปญที่เปิดอยู่ หลังระบบยืนยันข้อมูล</p>
+            : <p>เปิด Auto ได้จากหน้าแก้ไขของแคมเปญที่เปิดอยู่และยังไม่หมดเวลา เปิดรอก่อนเริ่ม LIVE ได้</p>
           : query.isSuccess && <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />}
+        {extraDetails}
     </AutomationDisclosureBody>
   </section>;
 

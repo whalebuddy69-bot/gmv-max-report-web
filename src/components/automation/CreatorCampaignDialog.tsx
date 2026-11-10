@@ -67,12 +67,13 @@ export function visibleCampaignBreakdown(rows: readonly Row[], now: number) {
       (b.spendMinor ?? -1) - (a.spendMinor ?? -1) || a.campaignId.localeCompare(b.campaignId));
 }
 
-function CampaignToggle({ row, action, onLifecycle }: {
-  row: Row; action: "PAUSE" | "RESUME" | null; onLifecycle: (row: Row, action: "PAUSE" | "RESUME", source: HTMLButtonElement) => void;
+function CampaignToggle({ row, action, now, onLifecycle }: {
+  row: Row; action: "PAUSE" | "RESUME" | null; now: number; onLifecycle: (row: Row, action: "PAUSE" | "RESUME", source: HTMLButtonElement) => void;
 }) {
-  const enabled = row.operationStatus === "ENABLE";
-  return <button type="button" role="switch" aria-label={`${enabled ? "ปิด" : "เปิดอีกครั้ง"} ${row.campaignName}`} aria-checked={enabled} disabled={!action}
-    title={!action ? "ยังสลับสถานะรายการนี้จากเว็บไม่ได้" : "เปิดหน้าตรวจและยืนยัน"}
+  const enabled = !endedTodayRow(row, now);
+  const expired = row.operationStatus === "ENABLE" && !enabled;
+  return <button type="button" role="switch" aria-label={`${expired ? "หมดเวลา" : enabled ? "ปิด" : "เปิดอีกครั้ง"} ${row.campaignName}`} aria-checked={enabled} disabled={!action}
+    title={expired ? "แคมเปญหมดเวลาแล้ว" : !action ? "ยังสลับสถานะรายการนี้จากเว็บไม่ได้" : "เปิดหน้าตรวจและยืนยัน"}
     onClick={(event) => { if (action) onLifecycle(row, action, event.currentTarget); }}
     className="inline-flex h-8 shrink-0 items-center rounded-md px-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-45">
     <span aria-hidden className={cn("relative block h-3.5 w-6 rounded-full", enabled ? "bg-primary" : "bg-muted-foreground/45")}>
@@ -89,7 +90,7 @@ export function CreatorCampaignBreakdownRows({ layout, rows, clientId, now, moni
   const hasEnabled = rows.some((row) => row.operationStatus === "ENABLE");
   return <CreatorCampaignAlignedRows layout={layout} rows={visibleCampaignBreakdown(rows, now)} now={now} renderIdentity={(row) => (
     <div data-campaign-identity className="flex min-w-0 items-center gap-0.5 whitespace-nowrap sm:gap-1">
-      {!monitoringOnly && <CampaignToggle row={row} action={allowedLifecycleIntent(row, clientId, hasEnabled, now)} onLifecycle={onLifecycle} />}
+      {!monitoringOnly && <CampaignToggle row={row} action={allowedLifecycleIntent(row, clientId, hasEnabled, now)} now={now} onLifecycle={onLifecycle} />}
       <span className="min-w-0 truncate text-[11px] font-semibold leading-tight" title={row.campaignName}>{row.campaignName}</span>
       <Popover>
         <PopoverTrigger asChild>
