@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
 import { armBudgetAuto, armBudgetAutoContinuous, armPpanBudgetAutoContinuous, ASHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, budgetAutoStatusSchema, fetchBudgetAutoStatus, KOOLKOOL_CAP_CLIENT_ID, LIVE_WAITING_FOR_SPEND, MYUSHOP_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, stopBudgetAuto, stopBudgetAutoContinuous, stopPpanBudgetAutoContinuous, VERIFIED_ROOM_SPEND_TREND, WAITING_FOR_LIVE, type BudgetAutoStatus, type BudgetCapClientId } from "@/api/automationBudget";
-import { http } from "@/api/client";
+import { ApiError, http } from "@/api/client";
 import { AutoBudgetControls, AutoBudgetStatusBody, AutoBudgetStatusPanel, autoFormSwitchState, buildAutoArmDraft, getAutoArmPreview, matchesAutoArmDraft } from "./AutoBudgetStatusPanel";
 
 const observedAt = "2026-03-06T01:00:00.000Z";
@@ -174,6 +174,51 @@ describe("Ppan continuous Auto", () => {
     expect(autoFormSwitchState(activeSummary, SRIHIW_CAP_CLIENT_ID)).toBeNull();
     expect(autoFormSwitchState({ ...activeSummary, continuousSession: null, overviewState: null }, PILOT_BUDGET_CLIENT_ID)).toBeNull();
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it("shows a verified current reason in the closed compact row without inventing one", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const props = { variant: "campaign-form", campaignId: sampleNumericCampaign, clientId: PILOT_BUDGET_CLIENT_ID,
+      dataUpdatedAt: now, refresh: async () => null } as const;
+    const unknown = { ...spendTrend, canArm: false, blockers: ["unknown-internal-tag"],
+      preview: { ...spendTrend.preview, status: "BELOW_THRESHOLD" } };
+    const render = (data: BudgetAutoStatus) => renderToStaticMarkup(<AutoBudgetControls {...props} data={data} />);
+    expect(render(unknown)).toContain("ยังยืนยันสถานะไม่ได้");
+    expect(render(unknown)).not.toContain("ยอดใช้");
+    expect(render(unknown)).not.toContain("unknown-internal-tag");
+    const explicit = { ...unknown, blockers: ["unknown-internal-tag", "SCHEDULED_TARGET_NOT_EXACT", "LINE_NOT_READY"] };
+    const html = render(explicit);
+    expect(html).toContain("ยังเปิด Auto ไม่ได้ · งบปัจจุบันคำนวณยอดเพิ่ม 20% ไม่ลงตัวในหน่วยสตางค์");
+    expect(html).not.toContain("ยังไม่พร้อมส่งแจ้งเตือน");
+    expect(html).not.toContain('role="switch"');
+    const stop = { ...explicit, continuousSession: { sessionId, status: "STOPPED", reason: "CAP_CHANGED", startedAt: observedAt } } satisfies BudgetAutoStatus;
+    expect(render(stop)).toContain("ปิด · งบปัจจุบันคำนวณยอดเพิ่ม 20% ไม่ลงตัวในหน่วยสตางค์");
+    expect(render(stop).match(/<button[^>]*role="switch"[^>]*>/)?.[0]).toContain(' disabled=""');
+    const detailed = renderToStaticMarkup(<AutoBudgetStatusBody data={stop} campaignId={sampleNumericCampaign} now={now} />);
+    expect(detailed).toContain("รอบ Auto ก่อนหน้า: หยุดแล้ว");
+    expect(detailed).not.toContain("เพดานงบเปลี่ยนจากที่ยืนยันไว้");
+    const estimate = { ...unknown, blockers: [], preview: { ...unknown.preview, status: "CAMPAIGN_CAP_EXCEEDED" } };
+    expect(render(estimate)).toContain("ยังเปิด Auto ไม่ได้ · งบตามสูตรจะเกินเพดานแคมเปญ");
+    expect(render({ ...estimate, preview: { ...estimate.preview, campaignId: "3234567890123456" } })).not.toContain("งบตามสูตรจะเกินเพดานแคมเปญ");
+  });
+
+  it("offers a read-only refresh for stale or failed data and keeps the arm switch unavailable", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(now + 46_000);
+    const props = { variant: "campaign-form", campaignId: sampleNumericCampaign, clientId: PILOT_BUDGET_CLIENT_ID } as const;
+    const stale = renderToStaticMarkup(<AutoBudgetControls {...props} data={spendTrend} dataUpdatedAt={now} refresh={async () => null} />);
+    expect(stale).toContain("ข้อมูล Auto หมดอายุหรือเวลาไม่ตรง");
+    expect(stale).toContain("ตรวจสถานะ Auto ล่าสุด");
+    expect(stale.match(/<button[^>]*role="switch"[^>]*>/)?.[0]).toContain(' disabled=""');
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retryOnMount: false } } });
+    await expect(queryClient.fetchQuery({ queryKey: ["automation", "budget-auto-status", 7, PILOT_BUDGET_CLIENT_ID, sampleNumericCampaign],
+      retry: false, queryFn: async () => { throw new ApiError("could not read", { code: "SERVICE_UNREACHABLE" }); } })).rejects.toThrow();
+    const failed = renderToStaticMarkup(<QueryClientProvider client={queryClient}>
+      <AutoBudgetStatusPanel {...props} userId={7} />
+    </QueryClientProvider>);
+    expect(failed).toContain("ยังอ่านสถานะ Auto ไม่ได้");
+    expect(failed).toContain("ตรวจสถานะ Auto ล่าสุด");
+    expect(failed).not.toContain('role="switch"');
+    queryClient.clear();
   });
 
   it("accepts exact Ppan status and preserves nnshop5719's one-shot payload", () => {

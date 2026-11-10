@@ -45,6 +45,11 @@ const previews = new Map([
   ["CAMPAIGN_CAP_EXCEEDED", "งบตามสูตรจะเกินเพดานแคมเปญ"],
   ["CLIENT_DAILY_CAP_EXCEEDED", "ประมาณการรวมจะเกินเพดานรายวัน"],
 ]);
+// Waiting for LIVE or spending less than 80% does not, by itself, prevent arming.
+const armBlockingPreviews = new Set([
+  "CONTEXT_UNVERIFIED", "POLICY_UNAVAILABLE", "POLICY_LOCKED", "TARGET_NOT_EXACT", "TARGET_BELOW_SPEND",
+  "CAMPAIGN_CAP_EXCEEDED", "CLIENT_DAILY_CAP_EXCEEDED",
+]);
 const modeLabels: Record<BudgetAutoStatus["mode"], string> = {
   disabled: "Auto ยังไม่เปิด", shadow: "ประเมินอย่างเดียว · ไม่เพิ่มงบ", live: "โหมดจริง · ทำงานเมื่อเปิดรอบและเข้าเกณฑ์",
 };
@@ -171,11 +176,31 @@ function Value({ label, value }: { label: string; value: number | null }) {
   </div>;
 }
 
+function RefreshAutoStatus({ refresh, refreshing }: { refresh: () => Promise<unknown>; refreshing: boolean }) {
+  return <Button type="button" variant="ghost" size="sm" className="min-h-10" disabled={refreshing} onClick={() => void refresh()}>
+    {refreshing ? "กำลังอ่านสถานะ Auto…" : "ตรวจสถานะ Auto ล่าสุด"}
+  </Button>;
+}
+
 function currentPreview(data: BudgetAutoStatus, campaignId: string | null, now: number, maxAge: number) {
   const readAt = data.preview ? Date.parse(data.preview.observedAt) : NaN;
   const age = now - readAt;
   return data.preview && campaignId === data.preview.campaignId && age >= -5_000 && age <= maxAge
     && bangkokDay(readAt) === bangkokDay(now) ? data.preview : null;
+}
+
+function compactArmReadiness(data: BudgetAutoStatus, campaignId: string | null, now: number, blockAutoStart: boolean) {
+  if (blockAutoStart) return { reason: "มีรายการงบค้าง", refresh: false };
+  if (!campaignId) return { reason: "เปิดจากแคมเปญที่ยืนยันแล้ว", refresh: false };
+  if (data.mode !== "live") return { reason: data.mode === "shadow" ? modeLabels.shadow : "ระบบยังไม่เปิดโหมดจริง", refresh: false };
+  const exact = data.preview?.campaignId === campaignId;
+  const fresh = currentPreview(data, campaignId, now, 45_000);
+  if (data.preview !== null && !fresh) return { reason: exact ? "ข้อมูล Auto หมดอายุหรือเวลาไม่ตรง" : "ข้อมูล Auto ไม่ตรงกับแคมเปญนี้", refresh: true };
+  const blocker = data.blockers.map(autoReasonText).find(Boolean);
+  if (blocker) return { reason: blocker, refresh: data.blockers.includes("CONTEXT_UNAVAILABLE") };
+  if (!fresh && data.canArm === true) return { reason: "ยังไม่มีข้อมูล Auto ของแคมเปญนี้", refresh: true };
+  const verdict = fresh && armBlockingPreviews.has(fresh.status) ? previews.get(fresh.status) : undefined;
+  return { reason: verdict, refresh: false };
 }
 
 /** The server's explicit capability is necessary, including when spend is below threshold. */
@@ -266,10 +291,11 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
   const detectsWhileWaiting = waiting ? session?.autoDetectLive === true : preview?.autoDetectLive === true;
   const boundWaiting = data.mode === "live" && boundSessionIsWaitingForSpend(data, preview);
   const actualStart = preview ? liveStartTime(preview.liveSessionStartedAt) : null;
-  const sessionReason = session?.reason ? autoReasonText(session.reason) ?? "ระบบยังไม่ยืนยันเงื่อนไขให้เพิ่มงบ" : null;
+  const sessionReason = session?.reason && !(session.status === "STOPPED" && session.reason === "CAP_CHANGED")
+    ? autoReasonText(session.reason) ?? "ระบบยังไม่ยืนยันเงื่อนไขให้เพิ่มงบ" : null;
   return <>
     <Badge variant="outline" className="mt-2 whitespace-normal">{continuous && data.mode === "live" ? "โหมดจริง · ทำงานเมื่อเปิด Auto และเข้าเกณฑ์" : modeLabels[data.mode]}</Badge>
-    {session && <p className="mt-2 text-xs text-muted-foreground">สถานะ Auto ต่อเนื่อง: {hold ? `เปิดอยู่ · พัก: ${hold}` : waiting ? waitingSessionLabel(data) : boundWaiting ? boundWaitingForSpendLabel : continuousLabels[session.status]} · เปิด Auto {time.format(new Date(session.startedAt))} (เวลาไทย){sessionReason && sessionReason !== hold ? ` · ${sessionReason}` : ""}</p>}
+    {session && <p className="mt-2 text-xs text-muted-foreground">{session.status === "STOPPED" ? "รอบ Auto ก่อนหน้า" : "สถานะ Auto ต่อเนื่อง"}: {hold ? `เปิดอยู่ · พัก: ${hold}` : waiting ? waitingSessionLabel(data) : boundWaiting ? boundWaitingForSpendLabel : continuousLabels[session.status]} · เปิด Auto {time.format(new Date(session.startedAt))} (เวลาไทย){sessionReason && sessionReason !== hold ? ` · ${sessionReason}` : ""}</p>}
     {waiting && session?.autoDetectLive !== true && <p className="text-xs text-muted-foreground">{legacyLiveWaitGuidance}</p>}
     {waiting && detectsWhileWaiting && !persistent && !waitingPreview && <p className="text-xs text-muted-foreground">{autoDetectLiveRule}</p>}
     {data.grant && <p className="mt-2 text-xs text-muted-foreground">รอบ Auto: {grantLabels.get(data.grant.status) ?? "ดูสถานะจากระบบ"} · สิ้นสุดตามกำหนด {time.format(new Date(data.grant.expiresAt))} (เวลาไทย)</p>}
@@ -305,13 +331,14 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
   </>;
 }
 
-export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, refresh, onChanged, variant = "panel", blockAutoStart = false,
+export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, refresh, refreshing = false, onChanged, variant = "panel", blockAutoStart = false,
   compactTitleId, compactDetailsId, onToggleCompactDetails, showCompactDetails = false }: {
   data: BudgetAutoStatus;
   campaignId: string | null;
   clientId: BudgetCapClientId;
   dataUpdatedAt: number;
   refresh: () => Promise<unknown>;
+  refreshing?: boolean;
   onChanged?: () => void;
   variant?: "panel" | "campaign-form";
   blockAutoStart?: boolean;
@@ -332,20 +359,24 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   const recoveryConsentId = useId();
   const persistentConsentId = useId();
   const needsFreshRead = lastAttemptAt !== null && dataUpdatedAt <= lastAttemptAt;
-  const preview = data.clientId === clientId ? getAutoArmPreview(data, campaignId, Date.now()) : null;
+  const now = Date.now();
+  const preview = data.clientId === clientId ? getAutoArmPreview(data, campaignId, now) : null;
   const compact = variant === "campaign-form";
   const switchState = autoFormSwitchState(data, clientId);
   const continuous = isContinuous(data);
   const session = continuous ? data.continuousSession : null;
   const hold = persistentHoldReason(data);
-  const switchLabel = switchState === null ? data.overviewState === "blocked" ? "พักเพื่อตรวจข้อมูล" : "ยังยืนยันสถานะไม่ได้"
-    : !switchState ? "ปิด" : session?.status === "BLOCKED" || data.overviewState === "blocked" ? "เปิดอยู่ · พักเพื่อตรวจข้อมูล"
-      : data.mode !== "live" ? "เปิดอยู่ · ระบบไม่เพิ่มงบ" : hold ? `เปิดอยู่ · พัก: ${hold}` : sessionIsWaitingForLive(data) ? waitingSessionLabel(data)
-        : boundSessionIsWaitingForSpend(data, currentPreview(data, campaignId, Date.now(), 180_000)) ? boundWaitingForSpendLabel : "เปิด";
   const canStop = data.clientId === clientId && data.canStop === true;
   const stopSessionId = canStop && session && session.status !== "STOPPED" ? session.sessionId : null;
   const stopGrantId = canStop && data.grant && (data.grant.status === "ARMED" || data.grant.status === "RESERVED") ? data.grant.grantId : null;
   const stopId = stopSessionId ?? stopGrantId;
+  const readiness = compact && data.clientId === clientId && switchState !== true && !stopId
+    ? compactArmReadiness(data, campaignId, now, blockAutoStart) : null;
+  const switchLabel = switchState === null ? data.overviewState === "blocked" ? "พักเพื่อตรวจข้อมูล"
+    : data.overviewState === undefined && campaignId && readiness?.reason ? "ยังเปิด Auto ไม่ได้" : "ยังยืนยันสถานะไม่ได้"
+    : !switchState ? "ปิด" : session?.status === "BLOCKED" || data.overviewState === "blocked" ? "เปิดอยู่ · พักเพื่อตรวจข้อมูล"
+      : data.mode !== "live" ? "เปิดอยู่ · ระบบไม่เพิ่มงบ" : hold ? `เปิดอยู่ · พัก: ${hold}` : sessionIsWaitingForLive(data) ? waitingSessionLabel(data)
+        : boundSessionIsWaitingForSpend(data, currentPreview(data, campaignId, now, 180_000)) ? boundWaitingForSpendLabel : "เปิด";
   const durationMinutes = /^\d{2,3}$/.test(duration) ? Number(duration) : NaN;
   const durationValid = Number.isSafeInteger(durationMinutes) && durationMinutes >= 10 && durationMinutes <= 120;
   const spendTrendDraft = draft?.strategy === "continuous" && draft.evidenceMode === "spend-trend";
@@ -429,7 +460,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
       <AutomationDisclosureRow title="Auto budget increase" titleId={compactTitleId} layout="compact-auto-row"
         controlsId={compactDetailsId ?? `${durationId}-details`} expanded={showCompactDetails} onToggle={onToggleCompactDetails ?? (() => {})} status={pending
         ? <span role="status">{pending === "stop" ? "กำลังตรวจผลการหยุด…" : "กำลังเปิด Auto…"}</span>
-        : <span>{switchLabel}{!switchState && !stopId ? blockAutoStart ? " · มีรายการงบค้าง" : !campaignId ? " · ยังไม่ยืนยันแคมเปญ" : "" : ""}</span>} trailingControl={
+        : <span>{switchLabel}{readiness?.reason ? ` · ${readiness.reason}` : ""}</span>} trailingControl={
         switchState !== null ? <button type="button" role="switch" aria-checked={switchState} aria-label="Auto budget increase"
           disabled={pending !== null || needsFreshRead || (switchState ? !stopId : !!stopId || !preview || blockAutoStart || draft !== null || (!continuous && !durationValid))}
           onClick={() => { if (switchState) void stop(); else review(); }}
@@ -478,7 +509,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
       <p className="text-xs text-muted-foreground">{continuous ? "เริ่มทันทีหลังยืนยัน · ไม่ต้องตั้งระยะเวลา" : "เริ่มทันทีหลังยืนยัน ไม่ใช่การตั้งเวลาเริ่มล่วงหน้า"}</p>
     </form>}
     {notice && <p role="status" className="text-xs text-muted-foreground">{notice}</p>}
-    {needsFreshRead && pending === null && <Button type="button" variant="ghost" className="min-h-10" onClick={() => void refresh()}>ตรวจสถานะ Auto ล่าสุด</Button>}
+    {(needsFreshRead || readiness?.refresh) && pending === null && <RefreshAutoStatus refresh={refresh} refreshing={refreshing} />}
   </div>;
 }
 
@@ -522,7 +553,7 @@ export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = 
   const summarySession = readCompactSummary && query.isSuccess ? query.data.continuousSession : null;
   const toggleDetails = () => setShowDetails((open) => !open);
   const controls = query.isSuccess && <AutoBudgetControls key={`${userId}:${clientId}:${campaignId ?? "none"}`} data={query.data} clientId={clientId}
-    campaignId={campaignId} dataUpdatedAt={query.dataUpdatedAt} refresh={query.refetch} variant={variant} blockAutoStart={blockAutoStart}
+    campaignId={campaignId} dataUpdatedAt={query.dataUpdatedAt} refresh={query.refetch} refreshing={query.isFetching} variant={variant} blockAutoStart={blockAutoStart}
     compactTitleId={titleId} compactDetailsId={detailsId} onToggleCompactDetails={toggleDetails} showCompactDetails={showDetails}
     onChanged={() => {
       // In summary mode the current query and overview are the same; the control's immediate refresh is enough.
@@ -531,6 +562,7 @@ export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = 
   if (compact) return <section className={automationDisclosureFrame} aria-labelledby={titleId}>
     {controls || <AutomationDisclosureRow title="Auto budget increase" titleId={titleId} layout="compact-auto-row"
       status={<span role="status">{pendingText}</span>} controlsId={detailsId} expanded={showDetails} onToggle={toggleDetails} />}
+    {query.isError && <RefreshAutoStatus refresh={query.refetch} refreshing={query.isFetching} />}
     <AutomationDisclosureBody id={detailsId} expanded={showDetails} className="space-y-1.5 text-xs text-muted-foreground">
         <p>ใช้ถึง 80% → เพิ่มงบ 20% เมื่อผ่านเพดานและเงื่อนไขความปลอดภัย</p>
         <p>ยอดใช้จากรายงานอาจล่าช้า และไม่ได้ยืนยันว่ากำลังไลฟ์อยู่</p>
@@ -540,7 +572,7 @@ export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = 
           : summarySession?.status === "ARMED"
             ? <>{query.isSuccess && sessionIsWaitingForLive(query.data) && <p>{summarySession.autoDetectLive === true ? autoDetectLiveRule : legacyLiveWaitGuidance}</p>}
               <p>{legacyRoomGuidance}</p></>
-            : <p>ต้องยืนยันแคมเปญที่เปิดอยู่ก่อนเปิด Auto</p>
+            : <p>เปิด Auto ได้จากหน้าแก้ไขของแคมเปญที่เปิดอยู่ หลังระบบยืนยันข้อมูล</p>
           : query.isSuccess && <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />}
     </AutomationDisclosureBody>
   </section>;
@@ -554,8 +586,7 @@ export function AutoBudgetStatusPanel({ clientId, userId, campaignId, variant = 
         <AutoBudgetStatusBody data={query.data} campaignId={campaignId} now={Date.now()} />
         {controls}
       </>
-      : <p role="status" className="mt-2 text-xs text-muted-foreground">
-        {pendingText}
-      </p>}
+      : <><p role="status" className="mt-2 text-xs text-muted-foreground">{pendingText}</p>
+        {query.isError && <RefreshAutoStatus refresh={query.refetch} refreshing={query.isFetching} />}</>}
   </section>;
 }
