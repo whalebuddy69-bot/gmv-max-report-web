@@ -159,11 +159,13 @@ describe("Ppan continuous Auto", () => {
     const post = vi.spyOn(http, "post");
     const props = { variant: "campaign-form", campaignId: sampleNumericCampaign, clientId: PILOT_BUDGET_CLIENT_ID, dataUpdatedAt: now, refresh: async () => null } as const;
     const tag = (html: string) => html.match(/<button[^>]*role="switch"[^>]*>/)?.[0] ?? "";
-    const available = renderToStaticMarkup(<AutoBudgetControls {...props} data={spendTrend} />);
+    const ready = { ...continuous, evidenceMode: VERIFIED_ROOM_SPEND_TREND,
+      preview: { ...continuous.preview, autoDetectLive: true, keepAutoAcrossRooms: true } } satisfies BudgetAutoStatus;
+    const available = renderToStaticMarkup(<AutoBudgetControls {...props} data={ready} />);
     expect(tag(available)).toContain('aria-checked="false"');
     expect(tag(available)).not.toContain(' disabled=""');
     expect(available).not.toContain("ยืนยันเปิด Auto ต่อเนื่อง ใช้เงินจริง");
-    const blocked = renderToStaticMarkup(<AutoBudgetControls {...props} data={spendTrend} blockAutoStart />);
+    const blocked = renderToStaticMarkup(<AutoBudgetControls {...props} data={ready} blockAutoStart />);
     expect(tag(blocked)).toContain(' disabled=""');
     const activeSummary = { ...spendTrend, canArm: false, canStop: true, preview: null, overviewState: "on",
       continuousSession: { sessionId, status: "ARMED", startedAt: observedAt },
@@ -174,6 +176,37 @@ describe("Ppan continuous Auto", () => {
     expect(autoFormSwitchState(activeSummary, SRIHIW_CAP_CLIENT_ID)).toBeNull();
     expect(autoFormSwitchState({ ...activeSummary, continuousSession: null, overviewState: null }, PILOT_BUDGET_CLIENT_ID)).toBeNull();
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it("requires durable authorization for every website switch, while still parsing legacy read and stop states", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    for (const clientId of [PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID,
+      MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID] as const) {
+      const legacy = { ...continuous, clientId, evidenceMode: VERIFIED_ROOM_SPEND_TREND,
+        preview: { ...continuous.preview, autoDetectLive: true } } satisfies BudgetAutoStatus;
+      const ready = { ...legacy, preview: { ...legacy.preview, keepAutoAcrossRooms: true } } satisfies BudgetAutoStatus;
+      const planned = { ...ready, preview: { ...ready.preview, waitingForLive: true, status: WAITING_FOR_LIVE,
+        liveSessionId: null, spendMinor: null } } satisfies BudgetAutoStatus;
+      const props = { variant: "campaign-form", campaignId: sampleNumericCampaign, clientId, dataUpdatedAt: now, refresh: async () => null } as const;
+      const ui = (data: BudgetAutoStatus) => renderToStaticMarkup(<AutoBudgetControls {...props} data={data} />);
+      const toggle = (html: string) => html.match(/<button[^>]*role="switch"[^>]*>/)?.[0];
+      expect(budgetAutoStatusSchema.safeParse(legacy).success).toBe(true);
+      expect(getAutoArmPreview(legacy, sampleNumericCampaign, now)).toEqual(legacy.preview);
+      expect(toggle(ui(legacy))).toContain(' disabled=""');
+      expect(ui(legacy)).toContain("ยังไม่พร้อมเปิด Auto แบบคงสถานะสำหรับแคมเปญนี้");
+      for (const data of [ready, planned]) {
+        expect(getAutoArmPreview(data, sampleNumericCampaign, now, true)).toEqual(data.preview);
+        expect(getAutoArmPreview(data, "6234567890123456", now, true)).toBeNull();
+        expect(getAutoArmPreview({ ...data, blockers: ["WRITE_LOCKED"] }, sampleNumericCampaign, now, true)).toBeNull();
+        expect(toggle(ui(data))).toContain('aria-checked="false"');
+        expect(toggle(ui(data))).not.toContain(' disabled=""');
+      }
+      const legacyActive = { ...legacy, canArm: false, canStop: true, continuousSession: { sessionId, startedAt: observedAt, status: "ARMED" } } satisfies BudgetAutoStatus;
+      expect(toggle(ui(legacyActive))).toContain('aria-checked="true"');
+      expect(toggle(ui(legacyActive))).not.toContain(' disabled=""');
+    }
+    expect(getAutoArmPreview(spendTrend, sampleNumericCampaign, now, true)).toBeNull();
+    expect(getAutoArmPreview({ ...spendTrend, clientId: NNSHOP_CAP_CLIENT_ID, strategy: "one-shot", evidenceMode: undefined }, sampleNumericCampaign, now, true)).toBeNull();
   });
 
   it("shows a verified current reason in the closed compact row without inventing one", () => {
@@ -595,11 +628,15 @@ describe("Ppan continuous Auto", () => {
     expect(budgetAutoStatusSchema.safeParse({ ...persistent, continuousSession: { ...persistent.continuousSession, autoDetectLive: undefined } }).success).toBe(false);
     expect(compact(persistent)).toContain("เปิดอยู่ · รอห้อง LIVE");
     expect(detailed(persistent)).toContain("ใช้งบล่าสุดที่ TikTok ยืนยันโดยอัตโนมัติ");
+    expect(detailed(persistent)).toContain("เมื่อเปลี่ยนงบ เพดาน หรือ ROI ที่ยืนยันได้ ระบบจะตรวจข้อมูลใหม่โดยไม่ต้องเปิด Auto ซ้ำ");
+    expect(detailed(persistent)).toContain("ถ้ายังไม่ถึงเวลาแคมเปญหรือไม่มีห้อง LIVE ระบบจะรอ");
     expect(detailed(persistent)).toContain("จะไม่ย้ายไปแคมเปญอื่น");
     expect(detailed(persistent)).not.toContain("ไม่ย้ายไปห้องถัดไป");
     for (const [data, hold] of [
       [{ ...persistent, preview: null, continuousSession: { ...persistent.continuousSession, reason: "CAMPAIGN_NOT_VISIBLE" } }, "ยังไม่พบแคมเปญเดิม"],
       [{ ...persistent, preview: null, blockers: ["CAMPAIGN_SETTINGS_CHANGED"] }, "การตั้งค่าแคมเปญเปลี่ยน"],
+      [{ ...persistent, preview: null, continuousSession: { ...persistent.continuousSession, reason: "AUTO_BASELINE_REVIEW" } }, "ยังยืนยันค่าตั้งต้นของรอบเดิมไม่ได้"],
+      [{ ...persistent, preview: null, continuousSession: { ...persistent.continuousSession, reason: "CAP_REACHED" } }, "เพิ่มตามสูตรแล้วจะเกินเพดานงบ"],
     ] as const) {
       const parsed = budgetAutoStatusSchema.parse(data);
       expect(compact(parsed)).toContain(`เปิดอยู่ · พัก: ${hold}`);
@@ -612,5 +649,19 @@ describe("Ppan continuous Auto", () => {
     const fenced = { ...persistent, overviewState: "blocked", continuousSession: { ...persistent.continuousSession,
       waitingForLive: false, status: "BLOCKED", reason: "OUTCOME_UNKNOWN" } } satisfies BudgetAutoStatus;
     expect(compact(fenced)).toContain("เปิดอยู่ · พักเพื่อตรวจข้อมูล");
+    const rebasing = { ...persistent, preview: null,
+      continuousSession: { ...persistent.continuousSession, waitingForLive: false, reason: "SPEND_UPDATE_PENDING" } } satisfies BudgetAutoStatus;
+    expect(compact(rebasing)).toContain("เปิดอยู่ · กำลังตรวจข้อมูลล่าสุด");
+    expect(compact(rebasing)).not.toContain("เปิดอยู่ · พัก");
+    expect(compact(rebasing)).toMatch(/role="switch" aria-checked="true" aria-label="Auto budget increase" class=/);
+    const awaitingLive = { ...persistent, preview: null,
+      continuousSession: { ...persistent.continuousSession, reason: "LIVE_DELIVERY_UNVERIFIED" } } satisfies BudgetAutoStatus;
+    expect(compact(awaitingLive)).toContain("เปิดอยู่ · รอห้อง LIVE");
+    const stopped = { ...persistent, canStop: false, overviewState: "off",
+      continuousSession: { ...persistent.continuousSession, waitingForLive: false, status: "STOPPED", reason: "CAP_CHANGED" } } satisfies BudgetAutoStatus;
+    expect(compact(stopped)).toContain('aria-checked="false"');
+    expect(compact(stopped)).not.toContain("เปิดอยู่ ·");
+    expect(detailed(stopped)).toContain("รอบ Auto ก่อนหน้า: หยุดแล้ว");
+    expect(detailed(stopped)).toContain("เมื่อคุณยืนยันเปิด:");
   });
 });

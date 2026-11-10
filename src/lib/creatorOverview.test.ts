@@ -67,8 +67,14 @@ describe("Creator overview data", () => {
       expect(buildCreatorOverviewRow(row, { auto: waiting }, now).autoBudget).toBe("waiting-for-live");
       expect(buildCreatorOverviewRow(row, { auto: { ...waiting,
         continuousSession: { ...waiting.continuousSession, autoDetectLive: true } } }, now).autoBudget).toBe("detecting-live");
-      expect(buildCreatorOverviewRow(row, { auto: { ...waiting,
-        continuousSession: { ...waiting.continuousSession, autoDetectLive: true, keepAutoAcrossRooms: true } } }, now).autoBudget).toBe("persistent-wait");
+      const persistent = { ...waiting, continuousSession: { ...waiting.continuousSession, autoDetectLive: true, keepAutoAcrossRooms: true } } as const;
+      expect(buildCreatorOverviewRow(row, { auto: persistent }, now).autoBudget).toBe("persistent-wait");
+      expect(buildCreatorOverviewRow(row, { auto: { ...persistent, continuousSession: { ...persistent.continuousSession,
+        reason: "AUTO_BASELINE_REVIEW" } } }, now).autoBudget).toBe("persistent-paused");
+      expect(buildCreatorOverviewRow(row, { auto: { ...persistent, overviewState: "blocked", continuousSession: { ...persistent.continuousSession,
+        waitingForLive: false, status: "BLOCKED" } } }, now).autoBudget).toBe("persistent-paused");
+      expect(buildCreatorOverviewRow(row, { auto: { ...persistent, overviewState: "off", continuousSession: { ...persistent.continuousSession,
+        waitingForLive: false, status: "STOPPED", reason: "CAP_CHANGED" } } }, now).autoBudget).toBe("off");
       expect(buildCreatorOverviewRow(row, { auto: { ...waiting, overviewState: "blocked" } }, now).autoBudget).toBe("blocked");
       expect(buildCreatorOverviewRow({ ...row, monitoringOnly: true }, { auto: waiting }, now).autoBudget).toBeNull();
     }

@@ -50,6 +50,7 @@ const autoStates = {
   "waiting-for-live": { order: 3, label: "เปิดแล้ว · รอ LIVE ใหม่", variant: "outline" },
   "detecting-live": { order: 3, label: "เปิดแล้ว · กำลังตรวจหาห้อง LIVE", variant: "outline" },
   "persistent-wait": { order: 3, label: "เปิดอยู่ · รอห้อง LIVE", variant: "outline" },
+  "persistent-paused": { order: 3, label: "เปิดอยู่ · พักการเพิ่มงบ", variant: "warning" },
   on: { order: 3, label: "เปิด", variant: "success" },
 } as const;
 const badgeClass = "px-1.5 py-0 text-[10px] leading-4";

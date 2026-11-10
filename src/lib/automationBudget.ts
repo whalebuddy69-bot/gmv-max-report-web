@@ -1,5 +1,5 @@
 import type { AutomationClient } from "@/api/automation";
-import { isAdditionalBudgetCapClientId, type AutomationBudgetOperation, type AutomationBudgetPreparation, type AutomationBudgetStatus, type BudgetCapClientId, type BudgetCapInput, type BudgetCapResult, type BudgetCapStatus, type BudgetPrepareInput } from "@/api/automationBudget";
+import { isAdditionalBudgetCapClientId, supportsAutoWaitingForLive, VERIFIED_ROOM_SPEND_TREND, type AutomationBudgetOperation, type AutomationBudgetPreparation, type AutomationBudgetStatus, type BudgetAutoStatus, type BudgetCapClientId, type BudgetCapInput, type BudgetCapResult, type BudgetCapStatus, type BudgetPrepareInput } from "@/api/automationBudget";
 import { bangkokDay, isFreshAutomationClient } from "./automation";
 
 export type BudgetDirection = "increase" | "decrease";
@@ -8,6 +8,46 @@ const MAX_CAP_AGE_MS = 45_000;
 const MAX_CLIENT_AGE_MS = 90_000;
 const MAX_CLOCK_SKEW_MS = 5_000;
 const bahtNumber = new Intl.NumberFormat("th-TH", { maximumFractionDigits: 0 });
+
+export const persistentAutoHoldText = new Map([
+  ["CAMPAIGN_NOT_VISIBLE", "ยังไม่พบแคมเปญเดิม"],
+  ["CAMPAIGN_SETTINGS_CHANGED", "การตั้งค่าแคมเปญเปลี่ยนและยังยืนยันไม่ได้"],
+  ["AUTO_BASELINE_REVIEW", "ยังยืนยันค่าตั้งต้นของรอบเดิมไม่ได้"],
+  ["CAP_REACHED", "เพิ่มตามสูตรแล้วจะเกินเพดานงบ"],
+  ["SCHEDULED_CAP_TOO_LOW", "เพดานปัจจุบันไม่พอสำหรับการเพิ่มงบ 20%"],
+  ["CAMPAIGN_CAP_EXCEEDED", "งบตามสูตรจะเกินเพดานแคมเปญ"],
+  ["CLIENT_DAILY_CAP_EXCEEDED", "ประมาณการรวมจะเกินเพดานรายวัน"],
+  ["TARGET_UNAVAILABLE", "ยังคำนวณงบใหม่ที่ปลอดภัยตามเงื่อนไขไม่ได้"],
+  ["SCHEDULED_TARGET_NOT_EXACT", "งบปัจจุบันคำนวณยอดเพิ่ม 20% ไม่ลงตัวในหน่วยสตางค์"],
+  ["WRITE_LOCKED", "มีรายการปรับงบที่ยังต้องตรวจผล"],
+  ["LINE_NOT_READY", "ยังไม่พร้อมส่งแจ้งเตือนทาง LINE"],
+  ["LEGACY_BUSY", "ระบบ Auto เดิมกำลังทำงานอยู่"],
+  ["NATIVE_AUTO_CONFLICT", "พบว่า Auto Budget ของ TikTok เปิดอยู่หรือข้อมูลขัดกัน"],
+  ["NATIVE_AUTO_UNVERIFIED", "ยังยืนยันไม่ได้ว่า Auto Budget ของ TikTok ปิดอยู่"],
+  ["CONTEXT_UNAVAILABLE", "ยังอ่านข้อมูลแคมเปญหรือเพดานไม่ครบ"],
+  ["AUTO_DISABLED", "ระบบยังไม่เพิ่มงบ"],
+]);
+
+export function isPersistentAutoSession(data: BudgetAutoStatus): boolean {
+  const session = data.continuousSession;
+  return data.strategy === "continuous" && data.evidenceMode === VERIFIED_ROOM_SPEND_TREND
+    && supportsAutoWaitingForLive(data.clientId) && session?.autoDetectLive === true
+    && session.keepAutoAcrossRooms === true && session.status !== "STOPPED";
+}
+
+/** Only the server's persisted active intent and reported hold can mark Auto as paused. */
+export function persistentAutoHoldReason(data: BudgetAutoStatus): string | null {
+  const session = data.continuousSession;
+  if (session?.status !== "ARMED" || !isPersistentAutoSession(data)) return null;
+  if (data.mode !== "live") return "ระบบยังไม่เพิ่มงบ";
+  for (const code of [...data.blockers, session.reason]) {
+    if (!code) continue;
+    const reason = persistentAutoHoldText.get(code);
+    if (reason) return reason;
+    if (code === "LIVE_DELIVERY_UNVERIFIED" && session.waitingForLive !== true) return "ยังยืนยันห้อง LIVE เดิมไม่ได้";
+  }
+  return null;
+}
 
 export function formatBudgetBaht(minor: number): string {
   const amount = BigInt(minor);

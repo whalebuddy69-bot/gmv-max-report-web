@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BANGKOK, bangkokDay } from "@/lib/automation";
-import { formatBudgetBaht } from "@/lib/automationBudget";
+import { formatBudgetBaht, isPersistentAutoSession, persistentAutoHoldReason, persistentAutoHoldText } from "@/lib/automationBudget";
 
 const time = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, dateStyle: "medium", timeStyle: "short" });
 const liveTime = new Intl.DateTimeFormat("th-TH", { timeZone: BANGKOK, calendar: "gregory", dateStyle: "medium", timeStyle: "medium" });
@@ -60,7 +60,7 @@ const grantLabels = new Map([
 const continuousLabels = {
   ARMED: "เปิดแล้ว · รอเข้าเกณฑ์",
   SENDING: "กำลังตรวจหรือส่งคำสั่ง",
-  BLOCKED: "พักการเพิ่มงบ · ต้องตรวจข้อมูล",
+  BLOCKED: "เปิดอยู่ · พักเพื่อตรวจข้อมูล",
   STOPPED: "หยุดแล้ว",
 };
 const continuousReasons = new Map([
@@ -68,7 +68,6 @@ const continuousReasons = new Map([
   ["CAMPAIGN_CHANGED", "ไม่ใช่แคมเปญที่เปิด Auto ไว้"],
   ["CAMPAIGN_NOT_OBSERVED", "ไม่พบแคมเปญที่เปิด Auto ไว้"],
   ["CAMPAIGN_NOT_VISIBLE", "ยังไม่พบแคมเปญเดิม"],
-  ["CAMPAIGN_SETTINGS_CHANGED", "การตั้งค่าแคมเปญเปลี่ยน"],
   ["LIVE_ENDED", "ไลฟ์จบหรือเปลี่ยนห้อง"],
   ["BASELINE_CHANGED", "งบหรือการตั้งค่าแคมเปญเปลี่ยนจากที่ยืนยันไว้"],
   ["CAP_CHANGED", "เพดานงบเปลี่ยนจากที่ยืนยันไว้"],
@@ -85,8 +84,8 @@ const continuousReasons = new Map([
 ]);
 const continuousRule = "ไม่จำกัดจำนวนครั้ง แต่ไม่เกินเพดานงบ · คำนวณจากงบปัจจุบันใหม่ทุกครั้ง";
 const continuousStopRule = "หยุดเมื่อไม่พบแคมเปญที่เปิด Auto ไว้ หรือ LIVE จบหรือเปลี่ยนห้อง · กดหยุดเองได้";
-const persistentAutoRule = "Auto เปิดค้างเฉพาะแคมเปญนี้ข้ามห้อง LIVE จนกว่าคุณจะกดหยุด ใช้งบล่าสุดที่ TikTok ยืนยันโดยอัตโนมัติ ถ้าไม่มีห้อง LIVE ระบบจะรอ ระบบจะพักเมื่อยังตรวจความปลอดภัยไม่ผ่าน และจะหยุดหากถูกถอนสิทธิ์ จะไม่ย้ายไปแคมเปญอื่น";
-const legacyRoomGuidance = "รอบนี้ไม่เปิดค้างข้ามห้อง LIVE หากต้องการใช้กับแคมเปญเดิมข้ามห้อง ให้หยุด Auto แล้วเปิดใหม่หนึ่งครั้ง";
+const persistentAutoRule = "Auto เปิดค้างเฉพาะแคมเปญนี้ข้ามห้อง LIVE และจะไม่ย้ายไปแคมเปญอื่น ใช้งบล่าสุดที่ TikTok ยืนยันโดยอัตโนมัติ เมื่อเปลี่ยนงบ เพดาน หรือ ROI ที่ยืนยันได้ ระบบจะตรวจข้อมูลใหม่โดยไม่ต้องเปิด Auto ซ้ำ ถ้ายังไม่ถึงเวลาแคมเปญหรือไม่มีห้อง LIVE ระบบจะรอ หากตรวจความปลอดภัยไม่ผ่าน ระบบจะพักการเพิ่มงบโดยยังเปิดอยู่ คุณกดหยุดได้ทุกเมื่อ และระบบจะหยุดหากถูกถอนสิทธิ์";
+const legacyRoomGuidance = "รอบเดิมยังใช้เงื่อนไขเดิม หากต้องการเปิดค้างสำหรับแคมเปญเดิม ให้หยุด Auto แล้วเปิดใหม่หนึ่งครั้ง";
 const spendTrendRule = "เทียบยอดใช้จาก TikTok ทุก 1 นาที · เพิ่มได้เมื่อยอดใช้เพิ่มจากรอบก่อนเท่านั้น";
 const spendTrendStopRule = "พักเมื่อยอดไม่เพิ่มหรืออ่านข้อมูลไม่ได้ · หยุดเมื่อไม่พบแคมเปญเดิม หรือกดหยุดเอง";
 const spendTrendCaveat = "ยอดใช้ที่เพิ่มขึ้นเป็นสัญญาณแทนการยืนยัน LIVE และอาจมาจากข้อมูลที่รายงานล่าช้า";
@@ -98,6 +97,7 @@ const verifiedRoomSpendTrendCaveat = "ยอดใช้ที่เพิ่ม
 const waitingForLiveLabel = "เปิดแล้ว · รอ LIVE ใหม่";
 const detectingLiveLabel = "เปิดแล้ว · กำลังตรวจหาห้อง LIVE";
 const persistentWaitingLabel = "เปิดอยู่ · รอห้อง LIVE";
+const persistentRecheckLabel = "เปิดอยู่ · กำลังตรวจข้อมูลล่าสุด";
 const boundWaitingForSpendLabel = "ผูกห้อง LIVE แล้ว · รอยอดใช้";
 const waitingForLiveRule = "เปิดรอได้โดยยังไม่เพิ่มงบ ระบบจะเพิ่มได้เมื่อยืนยันห้อง LIVE ของแคมเปญนี้ และยอดใช้เพิ่มขึ้นระหว่างการอ่านสองรอบตามเงื่อนไข";
 const autoDetectLiveRule = "ถ้าพบห้อง LIVE ที่ยืนยันว่าตรงกับแคมเปญนี้ ระบบจะผูกกับห้องนั้น หากยังไม่พบจะตรวจทุก 1 นาที เมื่อห้องที่ผูกจบ Auto จะหยุด ไม่ย้ายไปห้องถัดไป";
@@ -145,15 +145,12 @@ function waitingSessionLabel(data: BudgetAutoStatus) {
     : data.continuousSession?.autoDetectLive === true ? detectingLiveLabel : waitingForLiveLabel;
 }
 
-function persistentHoldReason(data: BudgetAutoStatus) {
-  const session = data.continuousSession;
-  if (data.mode !== "live" || !usesVerifiedRoomSpendTrend(data) || session?.status !== "ARMED" || session.keepAutoAcrossRooms !== true) return null;
-  const code = [session.reason, ...data.blockers].find((reason) => reason === "CAMPAIGN_NOT_VISIBLE" || reason === "CAMPAIGN_SETTINGS_CHANGED");
-  return code ? continuousReasons.get(code) ?? null : null;
+function persistentAutoIsRechecking(data: BudgetAutoStatus) {
+  return isPersistentAutoSession(data) && data.continuousSession?.status === "ARMED" && data.continuousSession.reason === "SPEND_UPDATE_PENDING";
 }
 
 function autoReasonText(reason: string) {
-  return continuousReasons.get(reason) ?? blockers.get(reason) ?? previews.get(reason);
+  return continuousReasons.get(reason) ?? blockers.get(reason) ?? previews.get(reason) ?? persistentAutoHoldText.get(reason);
 }
 
 function boundSessionIsWaitingForSpend(data: BudgetAutoStatus, preview: BudgetAutoStatus["preview"]) {
@@ -200,17 +197,24 @@ function compactArmReadiness(data: BudgetAutoStatus, campaignId: string | null, 
   if (blocker) return { reason: blocker, refresh: data.blockers.includes("CONTEXT_UNAVAILABLE") };
   if (!fresh && data.canArm === true) return { reason: "ยังไม่มีข้อมูล Auto ของแคมเปญนี้", refresh: true };
   const verdict = fresh && armBlockingPreviews.has(fresh.status) ? previews.get(fresh.status) : undefined;
+  if (!verdict && supportsAutoWaitingForLive(data.clientId) && fresh && !isPersistentArmPreview(data, fresh)
+    && getAutoArmPreview(data, campaignId, now)) return { reason: "ยังไม่พร้อมเปิด Auto แบบคงสถานะสำหรับแคมเปญนี้", refresh: true };
   return { reason: verdict, refresh: false };
 }
 
+function isPersistentArmPreview(data: BudgetAutoStatus, preview: NonNullable<BudgetAutoStatus["preview"]>) {
+  return usesVerifiedRoomSpendTrend(data) && preview.autoDetectLive === true && preview.keepAutoAcrossRooms === true;
+}
+
 /** The server's explicit capability is necessary, including when spend is below threshold. */
-export function getAutoArmPreview(data: BudgetAutoStatus, campaignId: string | null, now: number) {
+export function getAutoArmPreview(data: BudgetAutoStatus, campaignId: string | null, now: number, requirePersistent = false) {
   if (data.mode !== "live" || data.canArm !== true || data.blockers.length || data.grant !== null || data.canStop === true) return null;
   const continuous = isContinuous(data);
   if ((data.evidenceMode !== undefined || data.strategy === "continuous" || requiresVerifiedRoomSpendTrendAuto(data.clientId)) && !continuous) return null;
   if (data.continuousSession && (!continuous || data.continuousSession.status !== "STOPPED")) return null;
   const preview = currentPreview(data, campaignId, now, 45_000);
   if (!preview || !isNumericId(preview.campaignId)) return null;
+  if (requirePersistent && !isPersistentArmPreview(data, preview)) return null;
   if ((preview.allowExhaustedRecovery === true || preview.keepAutoAcrossRooms === true) && preview.autoDetectLive !== true) return null;
   if (preview.waitingForLive === true) return isWaitingArmPreview(data, preview) ? preview : null;
   if (preview.status === LIVE_WAITING_FOR_SPEND) return isRoomWaitingForSpend(data, preview) ? preview : null;
@@ -286,7 +290,7 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
   const activeSession = session && session.status !== "STOPPED" ? session : null;
   const recovery = activeSession ? activeSession.allowExhaustedRecovery === true : preview?.allowExhaustedRecovery === true;
   const persistent = activeSession ? activeSession.keepAutoAcrossRooms === true : preview?.keepAutoAcrossRooms === true;
-  const hold = persistentHoldReason(data);
+  const hold = persistentAutoHoldReason(data);
   const waiting = data.mode === "live" && sessionIsWaitingForLive(data);
   const detectsWhileWaiting = waiting ? session?.autoDetectLive === true : preview?.autoDetectLive === true;
   const boundWaiting = data.mode === "live" && boundSessionIsWaitingForSpend(data, preview);
@@ -295,7 +299,7 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
     ? autoReasonText(session.reason) ?? "ระบบยังไม่ยืนยันเงื่อนไขให้เพิ่มงบ" : null;
   return <>
     <Badge variant="outline" className="mt-2 whitespace-normal">{continuous && data.mode === "live" ? "โหมดจริง · ทำงานเมื่อเปิด Auto และเข้าเกณฑ์" : modeLabels[data.mode]}</Badge>
-    {session && <p className="mt-2 text-xs text-muted-foreground">{session.status === "STOPPED" ? "รอบ Auto ก่อนหน้า" : "สถานะ Auto ต่อเนื่อง"}: {hold ? `เปิดอยู่ · พัก: ${hold}` : waiting ? waitingSessionLabel(data) : boundWaiting ? boundWaitingForSpendLabel : continuousLabels[session.status]} · เปิด Auto {time.format(new Date(session.startedAt))} (เวลาไทย){sessionReason && sessionReason !== hold ? ` · ${sessionReason}` : ""}</p>}
+    {session && <p className="mt-2 text-xs text-muted-foreground">{session.status === "STOPPED" ? "รอบ Auto ก่อนหน้า" : "สถานะ Auto ต่อเนื่อง"}: {hold ? `เปิดอยู่ · พัก: ${hold}` : waiting ? waitingSessionLabel(data) : boundWaiting ? boundWaitingForSpendLabel : persistentAutoIsRechecking(data) ? persistentRecheckLabel : continuousLabels[session.status]} · เปิด Auto {time.format(new Date(session.startedAt))} (เวลาไทย){sessionReason && sessionReason !== hold ? ` · ${sessionReason}` : ""}</p>}
     {waiting && session?.autoDetectLive !== true && <p className="text-xs text-muted-foreground">{legacyLiveWaitGuidance}</p>}
     {waiting && detectsWhileWaiting && !persistent && !waitingPreview && <p className="text-xs text-muted-foreground">{autoDetectLiveRule}</p>}
     {data.grant && <p className="mt-2 text-xs text-muted-foreground">รอบ Auto: {grantLabels.get(data.grant.status) ?? "ดูสถานะจากระบบ"} · สิ้นสุดตามกำหนด {time.format(new Date(data.grant.expiresAt))} (เวลาไทย)</p>}
@@ -320,7 +324,7 @@ export function AutoBudgetStatusBody({ data, campaignId, now }: {
     </div>}
     {continuous && <details className="mt-2 text-xs text-muted-foreground">
       <summary className="w-fit cursor-pointer py-1">หลักเกณฑ์และข้อจำกัดของ Auto ต่อเนื่อง</summary>
-      <p className="mt-1">{continuousRule} · {persistent ? persistentAutoRule : spendTrend ? spendTrendStopRule : continuousStopRule}</p>
+      <p className="mt-1">{continuousRule} · {persistent ? `${activeSession ? "" : "เมื่อคุณยืนยันเปิด: "}${persistentAutoRule}` : spendTrend ? spendTrendStopRule : continuousStopRule}</p>
       {spendTrend && <p className="mt-1">{spendTrendRule} · {spendTrendCaveat}</p>}
       {verifiedRoomSpendTrend && <p className="mt-1">{recovery ? verifiedRoomWithRecoveryRule : verifiedRoomSpendTrendRule} · {verifiedRoomSpendTrendCaveat}</p>}
       {verifiedRoomSpendTrend && recovery && <p className="mt-1">{exhaustedRecoveryRule}</p>}
@@ -360,12 +364,14 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   const persistentConsentId = useId();
   const needsFreshRead = lastAttemptAt !== null && dataUpdatedAt <= lastAttemptAt;
   const now = Date.now();
-  const preview = data.clientId === clientId ? getAutoArmPreview(data, campaignId, now) : null;
   const compact = variant === "campaign-form";
+  // Website switches must not create an older, shorter-lived round as a fallback.
+  const requirePersistent = compact && supportsAutoWaitingForLive(clientId);
+  const preview = data.clientId === clientId ? getAutoArmPreview(data, campaignId, now, requirePersistent) : null;
   const switchState = autoFormSwitchState(data, clientId);
   const continuous = isContinuous(data);
   const session = continuous ? data.continuousSession : null;
-  const hold = persistentHoldReason(data);
+  const hold = persistentAutoHoldReason(data);
   const canStop = data.clientId === clientId && data.canStop === true;
   const stopSessionId = canStop && session && session.status !== "STOPPED" ? session.sessionId : null;
   const stopGrantId = canStop && data.grant && (data.grant.status === "ARMED" || data.grant.status === "RESERVED") ? data.grant.grantId : null;
@@ -374,9 +380,11 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
     ? compactArmReadiness(data, campaignId, now, blockAutoStart) : null;
   const switchLabel = switchState === null ? data.overviewState === "blocked" ? "พักเพื่อตรวจข้อมูล"
     : data.overviewState === undefined && campaignId && readiness?.reason ? "ยังเปิด Auto ไม่ได้" : "ยังยืนยันสถานะไม่ได้"
-    : !switchState ? "ปิด" : session?.status === "BLOCKED" || data.overviewState === "blocked" ? "เปิดอยู่ · พักเพื่อตรวจข้อมูล"
-      : data.mode !== "live" ? "เปิดอยู่ · ระบบไม่เพิ่มงบ" : hold ? `เปิดอยู่ · พัก: ${hold}` : sessionIsWaitingForLive(data) ? waitingSessionLabel(data)
-        : boundSessionIsWaitingForSpend(data, currentPreview(data, campaignId, now, 180_000)) ? boundWaitingForSpendLabel : "เปิด";
+    : !switchState ? "ปิด" : session?.status === "BLOCKED" ? "เปิดอยู่ · พักเพื่อตรวจข้อมูล"
+      : hold ? `เปิดอยู่ · พัก: ${hold}` : data.overviewState === "blocked" ? "เปิดอยู่ · พักเพื่อตรวจข้อมูล"
+        : data.mode !== "live" ? "เปิดอยู่ · ระบบไม่เพิ่มงบ" : sessionIsWaitingForLive(data) ? waitingSessionLabel(data)
+          : boundSessionIsWaitingForSpend(data, currentPreview(data, campaignId, now, 180_000)) ? boundWaitingForSpendLabel
+            : persistentAutoIsRechecking(data) ? persistentRecheckLabel : "เปิด";
   const durationMinutes = /^\d{2,3}$/.test(duration) ? Number(duration) : NaN;
   const durationValid = Number.isSafeInteger(durationMinutes) && durationMinutes >= 10 && durationMinutes <= 120;
   const spendTrendDraft = draft?.strategy === "continuous" && draft.evidenceMode === "spend-trend";
@@ -389,7 +397,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
   const attestationComplete = spendTrendDraft || (nativeOff && exclusive);
 
   function matchesDraft() {
-    const latest = data.clientId === clientId ? getAutoArmPreview(data, campaignId, Date.now()) : null;
+    const latest = data.clientId === clientId ? getAutoArmPreview(data, campaignId, Date.now(), requirePersistent) : null;
     return !blockAutoStart && latest !== null && draft !== null && matchesAutoArmDraft(data, latest, draft);
   }
 
@@ -412,7 +420,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
       if (draft.strategy === "continuous") {
         const session = await armBudgetAutoContinuous(clientId, draft.evidenceMode === "spend-trend" ? draft.input
           : { ...draft.input, nativeAutoOff: true, noConcurrentChanges: true });
-        setNotice(persistentDraft ? "บันทึกการเปิด Auto ค้างข้ามห้อง LIVE แล้ว · ยังไม่ยืนยันว่าเพิ่มงบ"
+        setNotice(persistentDraft ? "บันทึกการเปิด Auto ค้างสำหรับแคมเปญนี้แล้ว · ยังไม่ยืนยันว่าเพิ่มงบ"
           : waitingDraft ? autoDetectDraft ? "บันทึกการเปิด Auto แล้ว · รอตรวจสถานะห้อง LIVE · ยังไม่ยืนยันว่าเพิ่มงบ"
           : "บันทึกการเปิด Auto เพื่อรอ LIVE แล้ว · ยังไม่ยืนยันว่าเพิ่มงบ"
           : `บันทึกการเปิด Auto ต่อเนื่องแล้ว · เริ่ม ${time.format(new Date(session.startedAt))} (เวลาไทย) · ยังไม่ยืนยันว่าเพิ่มงบ`);
@@ -478,7 +486,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
       {pending === "stop" ? "กำลังตรวจผลการหยุด…" : stopSessionId ? "หยุด Auto ต่อเนื่อง" : "หยุดรอบ Auto"}
     </Button>}
     {draft ? <div className="space-y-2">
-      <p className="font-medium">{persistentDraft ? "เปิด Auto ค้างข้ามห้อง LIVE ของแคมเปญนี้" : autoDetectDraft ? waitingDraft ? "เปิด Auto ให้ตรวจหาห้อง LIVE ของแคมเปญนี้" : "เปิด Auto สำหรับห้อง LIVE นี้"
+      <p className="font-medium">{persistentDraft ? "เปิด Auto ค้างสำหรับแคมเปญนี้" : autoDetectDraft ? waitingDraft ? "เปิด Auto ให้ตรวจหาห้อง LIVE ของแคมเปญนี้" : "เปิด Auto สำหรับห้อง LIVE นี้"
         : waitingDraft ? "เปิด Auto ล่วงหน้าเพื่อรอ LIVE ของแคมเปญนี้"
         : draft.strategy === "continuous" ? "เปิด Auto ต่อเนื่องสำหรับแคมเปญนี้ทันที" : `เปิด Auto สำหรับแคมเปญนี้ทันที ${draft.input.durationMinutes} นาที`}</p>
       <p className="text-xs text-muted-foreground">ฐานงบ {formatBudgetBaht(draft.input.expectedBudgetMinor)} · {draft.strategy === "continuous" ? continuousRule : "เพิ่มได้สูงสุดหนึ่งครั้งเมื่อเข้าเกณฑ์"} · ใช้เงินจริง</p>
@@ -497,7 +505,7 @@ export function AutoBudgetControls({ data, campaignId, clientId, dataUpdatedAt, 
       </>}
       <div className="flex flex-wrap gap-2">
         <Button type="button" className="min-h-10" aria-describedby={consentDescription || undefined}
-          disabled={!matchesDraft() || !attestationComplete || pending !== null || needsFreshRead} onClick={() => void confirm()}>{pending === "arm" ? "กำลังเปิด Auto…" : persistentDraft ? "ยืนยันเปิด Auto ค้างข้ามห้อง LIVE" : autoDetectDraft ? waitingDraft ? "ยืนยันเปิด Auto ให้ตรวจหา LIVE" : "ยืนยันเปิด Auto สำหรับห้องนี้" : waitingDraft ? "ยืนยันเปิด Auto รอ LIVE" : draft.strategy === "continuous" ? "ยืนยันเปิด Auto ต่อเนื่อง ใช้เงินจริง" : "ยืนยันเปิด Auto ใช้เงินจริง"}</Button>
+          disabled={!matchesDraft() || !attestationComplete || pending !== null || needsFreshRead} onClick={() => void confirm()}>{pending === "arm" ? "กำลังเปิด Auto…" : persistentDraft ? "ยืนยันเปิด Auto ค้าง · ใช้เงินจริง" : autoDetectDraft ? waitingDraft ? "ยืนยันเปิด Auto ให้ตรวจหา LIVE" : "ยืนยันเปิด Auto สำหรับห้องนี้" : waitingDraft ? "ยืนยันเปิด Auto รอ LIVE" : draft.strategy === "continuous" ? "ยืนยันเปิด Auto ต่อเนื่อง ใช้เงินจริง" : "ยืนยันเปิด Auto ใช้เงินจริง"}</Button>
         <Button type="button" variant="outline" className="min-h-10" disabled={pending !== null} onClick={() => setDraft(null)}>ยกเลิก</Button>
       </div>
     </div> : !compact && preview && <form className="space-y-2" onSubmit={review}>
