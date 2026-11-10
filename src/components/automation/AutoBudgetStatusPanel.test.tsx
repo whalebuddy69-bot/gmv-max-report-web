@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
 import { armBudgetAuto, armBudgetAutoContinuous, armPpanBudgetAutoContinuous, ASHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, budgetAutoStatusSchema, fetchBudgetAutoStatus, LIVE_WAITING_FOR_SPEND, MYUSHOP_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, stopBudgetAuto, stopBudgetAutoContinuous, stopPpanBudgetAutoContinuous, VERIFIED_ROOM_SPEND_TREND, WAITING_FOR_LIVE, type BudgetAutoStatus, type BudgetCapClientId } from "@/api/automationBudget";
 import { http } from "@/api/client";
-import { AutoBudgetControls, AutoBudgetStatusBody, AutoBudgetStatusPanel, autoFormSwitchState, buildAutoArmDraft, getAutoArmPreview } from "./AutoBudgetStatusPanel";
+import { AutoBudgetControls, AutoBudgetStatusBody, AutoBudgetStatusPanel, autoFormSwitchState, buildAutoArmDraft, getAutoArmPreview, matchesAutoArmDraft } from "./AutoBudgetStatusPanel";
 
 const observedAt = "2026-03-06T01:00:00.000Z";
 const now = Date.parse(observedAt) + 2_000;
@@ -501,5 +501,70 @@ describe("Ppan continuous Auto", () => {
     await expect(armBudgetAutoContinuous(clientId, oldRequest)).resolves.toEqual({ sessionId, startedAt: observedAt });
     await expect(armBudgetAutoContinuous(clientId, request)).resolves.toEqual({ sessionId, startedAt: observedAt });
     expect(post.mock.calls).toEqual([[`/automation/budget/${clientId}/auto/arm`, oldRequest], [`/automation/budget/${clientId}/auto/arm`, request]]);
+  });
+
+  it.each([null, sampleLiveSessionId] as const)("requires a new exact review before authorizing Auto across rooms (%j)", async expectedLiveSessionId => {
+    const clientId = ASHOP_CAP_CLIENT_ID;
+    const waiting = expectedLiveSessionId === null;
+    const old = { ...continuous, clientId, evidenceMode: VERIFIED_ROOM_SPEND_TREND, preview: { ...continuous.preview,
+      status: waiting ? WAITING_FOR_LIVE : continuous.preview.status, liveSessionId: expectedLiveSessionId,
+      spendMinor: waiting ? null : continuous.preview.spendMinor, waitingForLive: waiting, autoDetectLive: true } } satisfies BudgetAutoStatus;
+    const ready = { ...old, preview: { ...old.preview, keepAutoAcrossRooms: true } } satisfies BudgetAutoStatus;
+    expect(budgetAutoStatusSchema.safeParse(ready).success).toBe(true);
+    const withoutDetection = { ...ready, preview: { ...ready.preview, autoDetectLive: undefined } };
+    expect(budgetAutoStatusSchema.safeParse(withoutDetection).success).toBe(false);
+    expect(getAutoArmPreview(withoutDetection, sampleNumericCampaign, now)).toBeNull();
+    expect(getAutoArmPreview(ready, sampleNumericCampaign, now)).toEqual(ready.preview);
+    const oldDraft = buildAutoArmDraft(old, old.preview, 30)!;
+    const readyDraft = buildAutoArmDraft(ready, ready.preview, 30)!;
+    const common = { expectedCampaignId: sampleNumericCampaign, expectedBudgetMinor: 800_000, expectedPolicyRevision: 2,
+      expectedLiveSessionId, evidenceMode: VERIFIED_ROOM_SPEND_TREND, autoDetectLive: true } as const;
+    expect(oldDraft.input).toEqual(common);
+    expect(readyDraft.input).toEqual({ ...common, keepAutoAcrossRooms: true });
+    expect(matchesAutoArmDraft(old, old.preview, oldDraft)).toBe(true);
+    expect(matchesAutoArmDraft(ready, ready.preview, readyDraft)).toBe(true);
+    expect(matchesAutoArmDraft(ready, ready.preview, oldDraft)).toBe(false);
+    expect(matchesAutoArmDraft(old, old.preview, readyDraft)).toBe(false);
+    const post = vi.spyOn(http, "post").mockResolvedValue({ data: { sessionId, startedAt: observedAt } });
+    const request = { ...common, keepAutoAcrossRooms: true, nativeAutoOff: true, noConcurrentChanges: true } as const;
+    await expect(armBudgetAutoContinuous(clientId, { ...request, autoDetectLive: undefined })).rejects.toThrow();
+    await expect(armBudgetAutoContinuous(clientId, request)).resolves.toEqual({ sessionId, startedAt: observedAt });
+    expect(post.mock.calls).toEqual([[`/automation/budget/${clientId}/auto/arm`, request]]);
+  });
+
+  it("keeps old consent until re-armed and leaves Stop available while persistent Auto waits or holds", () => {
+    const clientId = BUBPA_CAP_CLIENT_ID;
+    const waiting = { ...continuous, clientId, evidenceMode: VERIFIED_ROOM_SPEND_TREND, canArm: false, canStop: true, overviewState: "on",
+      preview: { ...continuous.preview, status: WAITING_FOR_LIVE, liveSessionId: null, spendMinor: null,
+        waitingForLive: true, autoDetectLive: true, keepAutoAcrossRooms: true },
+      continuousSession: { sessionId, startedAt: observedAt, status: "ARMED", waitingForLive: true, autoDetectLive: true } } satisfies BudgetAutoStatus;
+    const compact = (data: BudgetAutoStatus) => renderToStaticMarkup(<AutoBudgetControls clientId={clientId} campaignId={null} data={data}
+      dataUpdatedAt={now} refresh={async () => null} variant="campaign-form" />);
+    const detailed = (data: BudgetAutoStatus) => renderToStaticMarkup(<AutoBudgetStatusBody data={data} campaignId={sampleNumericCampaign} now={now} />);
+    expect(compact(waiting)).toContain("เปิดแล้ว · กำลังตรวจหาห้อง LIVE");
+    expect(detailed(waiting)).toContain("ให้หยุด Auto แล้วเปิดใหม่หนึ่งครั้ง");
+    expect(detailed(waiting)).not.toContain("เปิดค้างเฉพาะแคมเปญนี้ข้ามห้อง LIVE");
+    const persistent = { ...waiting, continuousSession: { ...waiting.continuousSession, keepAutoAcrossRooms: true } } satisfies BudgetAutoStatus;
+    expect(budgetAutoStatusSchema.safeParse(persistent).success).toBe(true);
+    expect(budgetAutoStatusSchema.safeParse({ ...persistent, continuousSession: { ...persistent.continuousSession, autoDetectLive: undefined } }).success).toBe(false);
+    expect(compact(persistent)).toContain("เปิดอยู่ · รอห้อง LIVE");
+    expect(detailed(persistent)).toContain("ใช้งบล่าสุดที่ TikTok ยืนยันโดยอัตโนมัติ");
+    expect(detailed(persistent)).toContain("จะไม่ย้ายไปแคมเปญอื่น");
+    expect(detailed(persistent)).not.toContain("ไม่ย้ายไปห้องถัดไป");
+    for (const [data, hold] of [
+      [{ ...persistent, preview: null, continuousSession: { ...persistent.continuousSession, reason: "CAMPAIGN_NOT_VISIBLE" } }, "ยังไม่พบแคมเปญเดิม"],
+      [{ ...persistent, preview: null, blockers: ["CAMPAIGN_SETTINGS_CHANGED"] }, "การตั้งค่าแคมเปญเปลี่ยน"],
+    ] as const) {
+      const parsed = budgetAutoStatusSchema.parse(data);
+      expect(compact(parsed)).toContain(`เปิดอยู่ · พัก: ${hold}`);
+      expect(detailed(parsed)).toContain(`เปิดอยู่ · พัก: ${hold}`);
+      expect(compact(parsed)).toMatch(/role="switch" aria-checked="true" aria-label="Auto budget increase" class=/);
+    }
+    for (const [reason, label] of [["BELOW_THRESHOLD", "ยอดใช้ยังไม่ถึง 80% ของงบแคมเปญ"], ["CAP_REACHED", "เพิ่มตามสูตรแล้วจะเกินเพดานงบ"]] as const) {
+      expect(detailed({ ...persistent, continuousSession: { ...persistent.continuousSession, reason } })).toContain(label);
+    }
+    const fenced = { ...persistent, overviewState: "blocked", continuousSession: { ...persistent.continuousSession,
+      waitingForLive: false, status: "BLOCKED", reason: "OUTCOME_UNKNOWN" } } satisfies BudgetAutoStatus;
+    expect(compact(fenced)).toContain("เปิดอยู่ · พักเพื่อตรวจข้อมูล");
   });
 });

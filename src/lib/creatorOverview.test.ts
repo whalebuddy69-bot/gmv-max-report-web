@@ -67,6 +67,8 @@ describe("Creator overview data", () => {
       expect(buildCreatorOverviewRow(row, { auto: waiting }, now).autoBudget).toBe("waiting-for-live");
       expect(buildCreatorOverviewRow(row, { auto: { ...waiting,
         continuousSession: { ...waiting.continuousSession, autoDetectLive: true } } }, now).autoBudget).toBe("detecting-live");
+      expect(buildCreatorOverviewRow(row, { auto: { ...waiting,
+        continuousSession: { ...waiting.continuousSession, autoDetectLive: true, keepAutoAcrossRooms: true } } }, now).autoBudget).toBe("persistent-wait");
       expect(buildCreatorOverviewRow(row, { auto: { ...waiting, overviewState: "blocked" } }, now).autoBudget).toBe("blocked");
       expect(buildCreatorOverviewRow({ ...row, monitoringOnly: true }, { auto: waiting }, now).autoBudget).toBeNull();
     }

@@ -12,7 +12,7 @@ export type CreatorOverviewRow = {
   active: boolean | null;
   campaignName: string | null;
   scheduleTime: { startAt: string; endAt: string | null } | null;
-  autoBudget: "on" | "off" | "pending" | "blocked" | "waiting-for-live" | "detecting-live" | null;
+  autoBudget: "on" | "off" | "pending" | "blocked" | "waiting-for-live" | "detecting-live" | "persistent-wait" | null;
   totalBudgetMinor: number | null;
   maxBudgetMinor: number | null;
   viewerBoostBudgetMinor: number | null;
@@ -63,6 +63,8 @@ export function buildCreatorOverviewRow(client: AutomationClient, source: {
   const waitingForLive = auto?.overviewState === "on" && auto.mode === "live" && auto.strategy === "continuous"
     && auto.evidenceMode === VERIFIED_ROOM_SPEND_TREND && supportsAutoWaitingForLive(client.clientId)
     && auto.continuousSession?.status === "ARMED" && auto.continuousSession.waitingForLive === true;
+  const waitingAuto = auto?.continuousSession?.keepAutoAcrossRooms === true ? "persistent-wait"
+    : auto?.continuousSession?.autoDetectLive === true ? "detecting-live" : "waiting-for-live";
   return {
     clientId: client.clientId,
     displayName: client.displayName,
@@ -73,7 +75,7 @@ export function buildCreatorOverviewRow(client: AutomationClient, source: {
     active: fresh ? campaign !== null : null,
     campaignName: campaign?.campaignName ?? null,
     scheduleTime: campaign?.scheduleStartAt ? { startAt: campaign.scheduleStartAt, endAt: campaign.scheduleEndAt ?? null } : null,
-    autoBudget: waitingForLive ? auto?.continuousSession?.autoDetectLive === true ? "detecting-live" : "waiting-for-live" : auto?.overviewState ?? null,
+    autoBudget: waitingForLive ? waitingAuto : auto?.overviewState ?? null,
     totalBudgetMinor: campaign?.dailyBudgetMinor ?? null,
     maxBudgetMinor: !monitoringOnly && source.cap?.clientId === client.clientId ? source.cap.cap?.clientDailyCapMinor ?? null : null,
     viewerBoostBudgetMinor: campaign?.viewerBoostBudgetMinor ?? null,
