@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient, type AutomationOverview } from "@/api/automation";
-import { KOOLKOOL_CAP_CLIENT_ID, VERIFIED_ROOM_SPEND_TREND } from "@/api/automationBudget";
+import { BOOMKAN_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID, VERIFIED_ROOM_SPEND_TREND } from "@/api/automationBudget";
 import { MAX_OBSERVATION_AGE_MS } from "@/lib/automation";
 import { invalidateOtherAutoBudgetViews } from "./AutoBudgetStatusPanel";
 import { CreatorCampaignEditPanel, CreatorCampaignSchedule, CreatorEditBudgetMeter, creatorEditAutoCampaignId, creatorEditControlScope, findEditableCreatorCampaign, getCreatorEditSync, isCreatorEditSyncCurrent, resolveCreatorEditSnapshot } from "./CreatorOverviewEdit";
@@ -60,7 +60,7 @@ describe("creator overview edit scope", () => {
   });
 
   it("routes each supported creator to its own controls without giving manual writes a stale snapshot", () => {
-    for (const clientId of [PILOT_BUDGET_CLIENT_ID, "srihiw", "nnshop5719", "ashopbytheta", "myushop4", "bubpa_shop189", KOOLKOOL_CAP_CLIENT_ID]) {
+    for (const clientId of [PILOT_BUDGET_CLIENT_ID, "srihiw", "nnshop5719", "ashopbytheta", "myushop4", "bubpa_shop189", KOOLKOOL_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID]) {
       const row = { ...client, clientId };
       expect(creatorEditControlScope(row, null, now)).toEqual({
         syncCurrent: false, budgetClientId: clientId, autoClientId: clientId,
@@ -95,7 +95,7 @@ describe("creator overview edit scope", () => {
     expect(findEditableCreatorCampaign(client, selected, now + MAX_OBSERVATION_AGE_MS)).toBeNull();
   });
 
-  it.each(["ashopbytheta", "bubpa_shop189", KOOLKOOL_CAP_CLIENT_ID])("preserves exact Sync proof for an enabled future scheduled campaign on %s", (clientId) => {
+  it.each(["ashopbytheta", "bubpa_shop189", KOOLKOOL_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID])("preserves exact Sync proof for an enabled future scheduled campaign on %s", (clientId) => {
     const scheduleStartAt = new Date(now + 3_600_000).toISOString();
     const row = { ...client, clientId, campaign: { ...client.campaign!, scheduleStartAt } };
     const selection = { ...selected, scheduleStartAt };
@@ -105,15 +105,15 @@ describe("creator overview edit scope", () => {
     expect(resolveCreatorEditSnapshot(overview({ ...row, campaign: null }), row, selection, now)).toBeNull();
   });
 
-  it("does not mount write controls for koolkool888 when the account is still monitoring-only or unbound", () => {
-    const row = { ...client, clientId: KOOLKOOL_CAP_CLIENT_ID };
+  it.each([KOOLKOOL_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID])("does not mount write controls for %s when the account is still monitoring-only or unbound", (clientId) => {
+    const row = { ...client, clientId };
     for (const ineligible of [{ ...row, monitoringOnly: true }, { ...row, tiktokAccountId: null }]) {
       expect(renderToStaticMarkup(<CreatorCampaignEditPanel client={ineligible} campaign={selected} actualRoi={null} userId={1} now={now}
         onBack={() => {}} onRefreshCampaign={() => {}} onSync={async () => null} />)).toBe("");
     }
   });
 
-  it.each([PILOT_BUDGET_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID])("shows the same Auto switch for %s using exact readiness before overview sync", (clientId) => {
+  it.each([PILOT_BUDGET_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID])("shows the same Auto switch for %s using exact readiness before overview sync", (clientId) => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const account = { ...client, clientId, campaign: null, budgetControlAvailable: false };
     const queryClient = new QueryClient();

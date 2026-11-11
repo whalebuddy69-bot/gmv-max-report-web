@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID, type AutomationClient } from "@/api/automation";
-import { ASHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, budgetConfirmationSchema, budgetOperationSchema, budgetPreparationSchema, budgetStatusSchema, changeBudgetCap, confirmBudgetChange, fetchAdditionalBudgetCapStatus, fetchBudgetStatus, KOOLKOOL_CAP_CLIENT_ID, MYUSHOP_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, prepareBudgetChange, readBudgetOperation, SRIHIW_CAP_CLIENT_ID, type AutomationBudgetPreparation, type AutomationBudgetStatus, type BudgetCapClientId } from "@/api/automationBudget";
+import { ASHOP_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, budgetConfirmationSchema, budgetOperationSchema, budgetPreparationSchema, budgetStatusSchema, changeBudgetCap, confirmBudgetChange, fetchAdditionalBudgetCapStatus, fetchBudgetStatus, KOOLKOOL_CAP_CLIENT_ID, MYUSHOP_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, prepareBudgetChange, readBudgetOperation, SRIHIW_CAP_CLIENT_ID, type AutomationBudgetPreparation, type AutomationBudgetStatus, type BudgetCapClientId } from "@/api/automationBudget";
 import { ApiError, http } from "@/api/client";
 import { budgetCapResultMatches, budgetResultMatches, canConfirmBudget, canConfirmBudgetCap, canEditBudgetCap, canPrepareBudget, freshBudgetCap, isTerminalBudgetResult, parseBudgetBaht, preparationMatchesRequest, validDirection } from "@/lib/automationBudget";
 import { BudgetCapEditor } from "./BudgetCapEditor";
@@ -97,8 +97,8 @@ describe("manual budget UI guardrails", () => {
   });
 
   it("keeps operation recovery isolated and hides spend controls when a new Creator lacks permission", () => {
-    expect(new Set(([PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID] as const)
-      .map((scope) => operationStorageKey(17, scope))).size).toBe(5);
+    expect(new Set(([PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID] as const)
+      .map((scope) => operationStorageKey(17, scope))).size).toBe(6);
     expect(operationStorageKey(17, NNSHOP_CAP_CLIENT_ID)).not.toBe(operationStorageKey(18, NNSHOP_CAP_CLIENT_ID));
     const queryClient = new QueryClient();
     queryClient.setQueryData(["automation", "budget-status", 17, NNSHOP_CAP_CLIENT_ID], {
@@ -206,7 +206,7 @@ describe("manual budget API contracts", () => {
     ]);
   });
 
-  it.each([NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID, MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID] as const)("isolates all calls and first cap for %s", async (clientId) => {
+  it.each([NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID, MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID] as const)("isolates all calls and first cap for %s", async (clientId) => {
     const scoped = { ...status, clientId, mode: "live" as const };
     const firstCap = { clientId, cap: null, capEditAllowed: true };
     const capChange = { expectedRevision: 0, capMinor: 75_050 };

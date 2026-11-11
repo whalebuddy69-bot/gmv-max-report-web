@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
-import { armBudgetAuto, armBudgetAutoContinuous, armPpanBudgetAutoContinuous, ASHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, budgetAutoStatusSchema, fetchBudgetAutoStatus, KOOLKOOL_CAP_CLIENT_ID, LIVE_WAITING_FOR_SPEND, MYUSHOP_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, stopBudgetAuto, stopBudgetAutoContinuous, stopPpanBudgetAutoContinuous, VERIFIED_ROOM_SPEND_TREND, WAITING_FOR_LIVE, type BudgetAutoStatus, type BudgetCapClientId } from "@/api/automationBudget";
+import { armBudgetAuto, armBudgetAutoContinuous, armPpanBudgetAutoContinuous, ASHOP_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, budgetAutoStatusSchema, fetchBudgetAutoOverviewStatus, fetchBudgetAutoStatus, KOOLKOOL_CAP_CLIENT_ID, LIVE_WAITING_FOR_SPEND, MYUSHOP_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, stopBudgetAuto, stopBudgetAutoContinuous, stopPpanBudgetAutoContinuous, VERIFIED_ROOM_SPEND_TREND, WAITING_FOR_LIVE, type BudgetAutoStatus, type BudgetCapClientId } from "@/api/automationBudget";
 import { ApiError, http } from "@/api/client";
 import { AutoBudgetControls, AutoBudgetStatusBody, AutoBudgetStatusPanel, autoFormSwitchState, buildAutoArmDraft, getAutoArmPreview, matchesAutoArmDraft } from "./AutoBudgetStatusPanel";
 
@@ -181,7 +181,7 @@ describe("Ppan continuous Auto", () => {
   it("requires durable authorization for every website switch, while still parsing legacy read and stop states", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     for (const clientId of [PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID,
-      MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID] as const) {
+      MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID] as const) {
       const legacy = { ...continuous, clientId, evidenceMode: VERIFIED_ROOM_SPEND_TREND,
         preview: { ...continuous.preview, autoDetectLive: true } } satisfies BudgetAutoStatus;
       const ready = { ...legacy, preview: { ...legacy.preview, keepAutoAcrossRooms: true } } satisfies BudgetAutoStatus;
@@ -361,7 +361,34 @@ describe("Ppan continuous Auto", () => {
     expect(post.mock.calls).toEqual([["/automation/budget/srihiw/auto/arm", input], ["/automation/budget/srihiw/auto/stop", { sessionId }]]);
   });
 
-  it.each([ASHOP_CAP_CLIENT_ID, MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID] as const)("uses immediate verified-room spend-trend Auto on the exact %s route", async (clientId) => {
+  it("reads Boomkan summary and readiness only from its own routes, without opting into Auto", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const off = { ...continuous, clientId: BOOMKAN_CAP_CLIENT_ID, evidenceMode: VERIFIED_ROOM_SPEND_TREND,
+      overviewState: "off", canArm: false, preview: null } satisfies BudgetAutoStatus;
+    const get = vi.spyOn(http, "get").mockResolvedValueOnce({ data: off }).mockResolvedValueOnce({ data: off })
+      .mockResolvedValueOnce({ data: { ...off, clientId: KOOLKOOL_CAP_CLIENT_ID } })
+      .mockResolvedValueOnce({ data: { ...off, clientId: PILOT_BUDGET_CLIENT_ID } });
+    const post = vi.spyOn(http, "post");
+    const { signal } = new AbortController();
+    await expect(fetchBudgetAutoOverviewStatus(BOOMKAN_CAP_CLIENT_ID, signal)).resolves.toEqual(off);
+    await expect(fetchBudgetAutoStatus(BOOMKAN_CAP_CLIENT_ID, signal)).resolves.toEqual(off);
+    await expect(fetchBudgetAutoOverviewStatus(BOOMKAN_CAP_CLIENT_ID, signal)).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    await expect(fetchBudgetAutoStatus(BOOMKAN_CAP_CLIENT_ID, signal)).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    expect(get.mock.calls).toEqual([
+      ["/automation/budget/boomkan/auto/status", { signal, params: { view: "summary" } }],
+      ["/automation/budget/boomkan/auto/status", { signal, params: { view: "detect-live" } }],
+      ["/automation/budget/boomkan/auto/status", { signal, params: { view: "summary" } }],
+      ["/automation/budget/boomkan/auto/status", { signal, params: { view: "detect-live" } }],
+    ]);
+    const html = renderToStaticMarkup(<AutoBudgetControls data={off} clientId={BOOMKAN_CAP_CLIENT_ID}
+      campaignId={sampleNumericCampaign} dataUpdatedAt={now} refresh={async () => null} variant="campaign-form" />);
+    expect(html.match(/<button[^>]*role="switch"[^>]*>/)?.[0]).toContain('aria-checked="false"');
+    expect(html.match(/<button[^>]*role="switch"[^>]*>/)?.[0]).toContain(' disabled=""');
+    expect(html).not.toContain("ยืนยันเปิด Auto ค้าง · ใช้เงินจริง");
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it.each([ASHOP_CAP_CLIENT_ID, MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID] as const)("uses immediate verified-room spend-trend Auto on the exact %s route", async (clientId) => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const ready = { ...continuous, clientId, evidenceMode: VERIFIED_ROOM_SPEND_TREND } satisfies BudgetAutoStatus;
     const armed = { ...ready, canArm: false, canStop: true,
@@ -425,7 +452,7 @@ describe("Ppan continuous Auto", () => {
     expect(post.mock.calls).toEqual([[`${scope}/auto/arm`, input], [`${scope}/auto/stop`, { sessionId }]]);
   });
 
-  it.each([PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID, MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID] as const)("pre-arms only an explicitly eligible exact campaign while %s waits for LIVE", async (clientId) => {
+  it.each([PILOT_BUDGET_CLIENT_ID, SRIHIW_CAP_CLIENT_ID, NNSHOP_CAP_CLIENT_ID, ASHOP_CAP_CLIENT_ID, MYUSHOP_CAP_CLIENT_ID, BUBPA_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID] as const)("pre-arms only an explicitly eligible exact campaign while %s waits for LIVE", async (clientId) => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const evidenceMode = clientId === PILOT_BUDGET_CLIENT_ID || clientId === SRIHIW_CAP_CLIENT_ID ? "spend-trend" : VERIFIED_ROOM_SPEND_TREND;
     const ready = { ...continuous, clientId, evidenceMode,
@@ -581,7 +608,7 @@ describe("Ppan continuous Auto", () => {
     expect(post.mock.calls).toEqual([[`/automation/budget/${clientId}/auto/arm`, oldRequest], [`/automation/budget/${clientId}/auto/arm`, request]]);
   });
 
-  it.each(([ASHOP_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID] as const).flatMap((clientId) =>
+  it.each(([ASHOP_CAP_CLIENT_ID, KOOLKOOL_CAP_CLIENT_ID, BOOMKAN_CAP_CLIENT_ID] as const).flatMap((clientId) =>
     [null, sampleLiveSessionId].map((expectedLiveSessionId) => ({ clientId, expectedLiveSessionId }))))(
     "requires a new exact review for Auto across rooms on $clientId ($expectedLiveSessionId)", async ({ clientId, expectedLiveSessionId }) => {
     const waiting = expectedLiveSessionId === null;

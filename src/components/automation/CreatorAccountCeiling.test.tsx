@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 import { PILOT_BUDGET_CLIENT_ID } from "@/api/automation";
-import { SRIHIW_CAP_CLIENT_ID } from "@/api/automationBudget";
+import { BOOMKAN_CAP_CLIENT_ID, SRIHIW_CAP_CLIENT_ID } from "@/api/automationBudget";
 import { http } from "@/api/client";
 import { CreatorAccountCeiling } from "./CreatorAccountCeiling";
 
@@ -29,6 +29,25 @@ it("shows scoped Daily Ceiling without a campaign, and never mounts edit control
   expect(extra).not.toContain("฿9,000.00");
   expect(extra).not.toContain("แก้เพดานงบ");
   expect(render(PILOT_BUDGET_CLIENT_ID)).toContain("฿9,000.00");
+  expect(post).not.toHaveBeenCalled();
+  queries.clear();
+});
+
+it("does not invent a first Daily Ceiling or write permissions for Boomkan", () => {
+  const post = vi.spyOn(http, "post");
+  const queries = new QueryClient();
+  const key = ["automation", "cap-status", 3, BOOMKAN_CAP_CLIENT_ID];
+  const render = () => renderToStaticMarkup(<QueryClientProvider client={queries}>
+    <CreatorAccountCeiling clientId={BOOMKAN_CAP_CLIENT_ID} userId={3} displayName="Synthetic Boomkan" />
+  </QueryClientProvider>);
+  queries.setQueryData(key, { clientId: BOOMKAN_CAP_CLIENT_ID, capEditAllowed: true, cap: null });
+  const unset = render();
+  expect(unset).toContain("Daily Ceiling");
+  expect(unset).toContain("ยังไม่ตั้ง");
+  expect(unset).not.toContain("฿");
+  expect(unset).not.toContain("แก้เพดานงบ");
+  queries.setQueryData(key, { clientId: BOOMKAN_CAP_CLIENT_ID, capEditAllowed: false, cap: null });
+  expect(render()).not.toContain("แก้เพดานงบ");
   expect(post).not.toHaveBeenCalled();
   queries.clear();
 });
